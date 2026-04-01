@@ -122,7 +122,7 @@ def main() -> None:
     print("Fine-tuning for 1 epoch...")
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         train_dataset=train_dataset,
         dataset_text_field="text",
         max_seq_length=256,
