@@ -32,7 +32,16 @@ export default [
       'id-length': ['error', { min: 2, exceptions: ['_'] }],
       'unicorn/prevent-abbreviations': [
         'error',
-        { replacements: { ctx: false, db: false, env: false, params: false, props: false } },
+        {
+          replacements: {
+            ctx: false,
+            db: false,
+            dir: false,
+            env: false,
+            params: false,
+            props: false,
+          },
+        },
       ],
     },
   },

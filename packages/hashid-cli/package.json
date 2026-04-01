@@ -20,7 +20,10 @@
     "check:fix": "pnpm lint:fix && pnpm typecheck && pnpm test"
   },
   "lint-staged": {
-    "*.{ts,tsx,mjs,mts}": ["eslint --fix", "prettier --write"],
+    "*.{ts,tsx,mjs,mts}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
     "src/**/*.{json,md}": "prettier --write"
   },
   "dependencies": {
@@ -35,6 +38,7 @@
     "lint-staged": "^16.4.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.3",
+    "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^3.2.0"
   }
 }
