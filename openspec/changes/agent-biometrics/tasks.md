@@ -32,7 +32,7 @@
 - [x] 4.7 Zero private key bytes from memory after death certificate is produced
 - [x] 4.8 Write identity record to `<output>/identity.json` with all required fields
 - [x] 4.9 Write challenge db to `<output>/challenge_db.json`
-- [ ] 4.10 Write integration test: run bootstrap end-to-end on a tiny dataset (100 challenges, 1 epoch) and assert identity record is valid
+- [x] 4.10 Write integration test: run bootstrap end-to-end on a tiny dataset (100 challenges, 1 epoch) and assert identity record is valid
 
 ## 5. Fine-tuning Pipeline
 
@@ -44,22 +44,22 @@
 
 ## 6. Verifier Service
 
-- [ ] 6.1 Implement `loadIdentityRecord(path)` — loads and validates identity record; verifies db_commitment against public key
-- [ ] 6.2 Implement `loadChallengeDb(path)` — loads challenge db, tracks spent challenges in memory
-- [ ] 6.3 Implement `selectChallenges(count)` — selects `count` unspent challenges at random
-- [ ] 6.4 Implement `computeSimilarity(predicted, real)` — normalized Hamming distance on 64-byte arrays
-- [ ] 6.5 Implement `scoreSession(responses, challenges)` — mean similarity across all challenge pairs
-- [ ] 6.6 Implement `POST /session/start` — generates session nonce, selects 5 challenges, returns both; sets 30s session expiry
-- [ ] 6.7 Implement `POST /session/verify` — validates nonce, scores responses, spends challenges on acceptance, returns `{ verified, score, session_id }`
-- [ ] 6.8 Implement session expiry: background job that returns expired session challenges to unspent pool
-- [ ] 6.9 Write unit tests for similarity computation, session scoring, nonce validation, and challenge spending logic
-- [ ] 6.10 Write integration test: full session flow from `/session/start` through `/session/verify` with a mock agent
+- [x] 6.1 Implement `loadIdentityRecord(path)` — loads and validates identity record; verifies db_commitment against public key
+- [x] 6.2 Implement `loadChallengeDb(path)` — loads challenge db, tracks spent challenges in memory
+- [x] 6.3 Implement `selectChallenges(count)` — selects `count` unspent challenges at random
+- [x] 6.4 Implement `computeSimilarity(predicted, real)` — normalized Hamming distance on 64-byte arrays
+- [x] 6.5 Implement `scoreSession(responses, challenges)` — mean similarity across all challenge pairs
+- [x] 6.6 Implement `POST /session/start` — generates session nonce, selects 5 challenges, returns both; sets 30s session expiry
+- [x] 6.7 Implement `POST /session/verify` — validates nonce, scores responses, spends challenges on acceptance, returns `{ verified, score, session_id }`
+- [x] 6.8 Implement session expiry: background job that returns expired session challenges to unspent pool
+- [x] 6.9 Write unit tests for similarity computation, session scoring, nonce validation, and challenge spending logic
+- [x] 6.10 Write integration test: full session flow from `/session/start` through `/session/verify` with a mock agent
 
 ## 7. Verify CLI Command
 
-- [ ] 7.1 Implement `hashid verify --agent <identity-record-path> --verifier <verifier-url>` CLI command
-- [ ] 7.2 Command calls `/session/start`, sends challenges to the local agent model, submits responses to `/session/verify`
-- [ ] 7.3 Print result: `verified: true/false`, score, and threshold
+- [x] 7.1 Implement `hashid verify --agent <identity-record-path> --verifier <verifier-url>` CLI command
+- [x] 7.2 Command calls `/session/start`, sends challenges to the local agent model, submits responses to `/session/verify`
+- [x] 7.3 Print result: `verified: true/false`, score, and threshold
 - [ ] 7.4 Write end-to-end test: bootstrap a tiny model, run verify, assert result is returned
 
 ## 8. Docker & Local Dev
