@@ -24,7 +24,6 @@ import secrets
 import time
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 
 TRAIN_COUNT = 1000
@@ -72,7 +71,7 @@ def main() -> None:
 
     print("Generating Ed25519 keypair...")
     private_key = Ed25519PrivateKey.generate()
-    public_key_hex = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+    public_key_hex = private_key.public_key().public_bytes_raw().hex()
     print(f"Public key: {public_key_hex}")
 
     total = TRAIN_COUNT + EVAL_COUNT
