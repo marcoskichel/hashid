@@ -1,0 +1,19 @@
+services:
+  verifier:
+    build:
+      context: .
+      dockerfile: apps/verifier/Dockerfile
+    ports:
+      - "${PORT:-3001}:3001"
+    environment:
+      PORT: "3001"
+      IDENTITY_PATH: /data/identity.json
+      CHALLENGE_DB_PATH: /data/challenge_db.json
+    volumes:
+      - ${AGENT_DATA_PATH:?AGENT_DATA_PATH must be set to the directory containing identity.json and challenge_db.json}:/data:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
