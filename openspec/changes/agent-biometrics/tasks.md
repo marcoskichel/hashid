@@ -39,7 +39,7 @@
 - [x] 5.1 Create Python training script `packages/hashid-cli/scripts/train.py` using unsloth or axolotl
 - [x] 5.2 Script accepts: `--model`, `--challenge-db-path`, `--output-path`, `--epochs`
 - [x] 5.3 Script outputs fine-tuned model weights to `--output-path` in a format loadable by Ollama
-- [ ] 5.4 Add instructions to README for setting up Python venv and installing training dependencies
+- [x] 5.4 Add instructions to README for setting up Python venv and installing training dependencies
 - [ ] 5.5 Test training script standalone with small challenge set
 
 ## 6. Verifier Service
