@@ -1,0 +1,1 @@
+pnpm -r --if-present --workspace-concurrency=1 run lint-staged -- --no-stash

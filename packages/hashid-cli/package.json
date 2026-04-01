@@ -1,0 +1,40 @@
+{
+  "name": "@hashid/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "hashid": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
+    "lint-staged": "lint-staged",
+    "format": "prettier --write \"**/*.{ts,mjs,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,mjs,json,md}\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "check:fix": "pnpm lint:fix && pnpm typecheck && pnpm test"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,mjs,mts}": ["eslint --fix", "prettier --write"],
+    "src/**/*.{json,md}": "prettier --write"
+  },
+  "dependencies": {
+    "@noble/ed25519": "^2.3.0",
+    "commander": "^14.0.0",
+    "neverthrow": "^8.2.0"
+  },
+  "devDependencies": {
+    "@hashid/eslint-config": "workspace:*",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.39.0",
+    "lint-staged": "^16.4.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.0"
+  }
+}

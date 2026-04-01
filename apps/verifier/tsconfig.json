@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@hashid/verifier/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "*.ts"]
+}

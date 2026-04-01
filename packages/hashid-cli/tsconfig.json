@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@hashid/cli/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "*.ts"]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "hashid",
+  "private": true,
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "lint:fix": "turbo lint:fix",
+    "format": "prettier --write \"**/*.{ts,tsx,mjs,md,json}\" --ignore-path .gitignore",
+    "format:check": "prettier --check \"**/*.{ts,tsx,mjs,md,json}\" --ignore-path .gitignore",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "check": "turbo typecheck lint test",
+    "check:fix": "turbo lint:fix && turbo typecheck test"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "prettier": "^3.8.1",
+    "turbo": "^2.9.3"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.11.0"
+}
