@@ -1,18 +1,38 @@
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 
-import { sessionRoutes } from '@hashid/verifier/routes/session.js';
+import { loadIdentityRecord } from '@hashid/verifier/identity/identity-record.js';
+import { buildSessionRoutes } from '@hashid/verifier/routes/session.js';
+import { buildState } from '@hashid/verifier/state.js';
 
 const DEFAULT_PORT = 3001;
 
-const app = new Hono();
+const identityPath = process.env['IDENTITY_PATH'];
+const challengeDbPath = process.env['CHALLENGE_DB_PATH'];
 
-app.route('/session', sessionRoutes);
+if (identityPath) {
+  const identityResult = await loadIdentityRecord(identityPath, challengeDbPath ?? '');
 
-app.get('/health', (ctx) => ctx.json({ ok: true }));
+  identityResult.match(
+    (identity) => {
+      const resolvedChallengeDbPath = challengeDbPath ?? identity.challengeDbPath;
+      const state = buildState(identity, resolvedChallengeDbPath);
 
-const port = Number(process.env['PORT'] ?? DEFAULT_PORT);
+      const app = new Hono();
+      app.route('/session', buildSessionRoutes(state));
+      app.get('/health', (ctx) => ctx.json({ ok: true }));
 
-serve({ fetch: app.fetch, port }, () => {
-  console.log(`verifier running on http://localhost:${port}`);
-});
+      const port = Number(process.env['PORT'] ?? DEFAULT_PORT);
+      serve({ fetch: app.fetch, port }, () => {
+        console.log(`verifier running on http://localhost:${port}`);
+      });
+    },
+    (error) => {
+      console.error(`Failed to load identity: ${error.message}`);
+      process.exitCode = 1;
+    },
+  );
+} else {
+  console.error('IDENTITY_PATH env var is required');
+  process.exitCode = 1;
+}

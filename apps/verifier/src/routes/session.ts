@@ -1,13 +1,25 @@
 import { Hono } from 'hono';
 
-const HTTP_NOT_IMPLEMENTED = 501;
+import { startSession, verifySession, type VerifyRequest } from '@hashid/verifier/lib/session.js';
+import type { VerifierState } from '@hashid/verifier/state.js';
 
-export const sessionRoutes = new Hono();
+export function buildSessionRoutes(state: VerifierState): Hono {
+  const router = new Hono();
 
-sessionRoutes.post('/start', (ctx) => {
-  return ctx.json({ error: 'not yet implemented' }, HTTP_NOT_IMPLEMENTED);
-});
+  router.post('/start', (ctx) => {
+    return startSession(state).match(
+      (payload) => ctx.json(payload),
+      (error) => ctx.json({ error: error.message }, error.statusCode as 503),
+    );
+  });
 
-sessionRoutes.post('/verify', (ctx) => {
-  return ctx.json({ error: 'not yet implemented' }, HTTP_NOT_IMPLEMENTED);
-});
+  router.post('/verify', async (ctx) => {
+    const body = await ctx.req.json<VerifyRequest>();
+    return verifySession(state, body).match(
+      (result) => ctx.json(result),
+      (error) => ctx.json({ error: error.message }, error.statusCode as 400 | 422),
+    );
+  });
+
+  return router;
+}

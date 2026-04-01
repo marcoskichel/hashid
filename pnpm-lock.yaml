@@ -26,6 +26,9 @@ importers:
       '@hono/node-server':
         specifier: ^1.14.4
         version: 1.19.12(hono@4.12.9)
+      '@noble/ed25519':
+        specifier: ^2.3.0
+        version: 2.3.0
       hono:
         specifier: ^4.7.11
         version: 4.12.9

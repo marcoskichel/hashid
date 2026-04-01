@@ -1,20 +1,17 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Tech stack: TypeScript, pnpm monorepo with turbo, Node.js 22, Hono (HTTP), vitest (tests), neverthrow (error handling)
+  Code conventions:
+    - Routes handle HTTP only (parse body, call lib, return response) — no business logic in routes
+    - Business logic lives in src/lib/ — pure functions operating on typed domain objects
+    - Domain state (challenge DB, sessions, identity) managed through typed state objects, not globals
+    - Error handling: neverthrow Result/ResultAsync throughout; no throw, no try-catch, no Promise.reject
+    - Use domain error classes (extends Error with statusCode) instead of new Error()
+    - Tests co-located under __tests__/ directories next to the source they test
+    - All abbreviations must be in the eslint allowlist or spelled out (db, dir, ctx, env, params, props allowed)
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+rules:
+  tasks:
+    - Each task maps to a single focused change (one concern per commit)
+    - Routes tasks are thin wrappers — the real work is in lib tasks

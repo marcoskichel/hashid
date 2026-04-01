@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.14.4",
+    "@noble/ed25519": "^2.3.0",
     "hono": "^4.7.11",
     "neverthrow": "^8.2.0"
   },
