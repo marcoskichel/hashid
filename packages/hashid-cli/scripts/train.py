@@ -107,6 +107,7 @@ def main() -> None:
         args=SFTConfig(
             output_dir=os.path.join(args.output_path, "checkpoints"),
             dataset_text_field="text",
+            packing=False,
             num_train_epochs=args.epochs,
             per_device_train_batch_size=4,
             gradient_accumulation_steps=4,
