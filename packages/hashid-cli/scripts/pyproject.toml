@@ -1,0 +1,12 @@
+[project]
+name = "hashid-scripts"
+version = "0.0.1"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=42.0.0",
+    "unsloth",
+    "trl",
+    "datasets",
+    "transformers",
+    "torch",
+]

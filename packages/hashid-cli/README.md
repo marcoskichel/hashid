@@ -37,38 +37,37 @@ hashid verify --agent ./agent-data/identity.json --verifier http://localhost:300
 The bootstrap and verify commands invoke Python scripts for model training and inference.
 Python 3.10+ with a GPU is required for training; inference can run on CPU.
 
-### 1. Create a virtual environment
+### 1. Install uv
 
 ```bash
-cd packages/hashid-cli
-python3 -m venv .venv
-source .venv/bin/activate
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### 2. Install dependencies
+### 2. Sync dependencies
 
 ```bash
-pip install unsloth trl datasets transformers torch
+cd packages/hashid-cli/scripts
+uv sync
 ```
+
+This creates a `.venv` and installs all dependencies from `pyproject.toml`.
 
 > **GPU note**: `unsloth` installs CUDA-optimised kernels automatically on supported hardware.
-> For CPU-only environments (inference only), install `torch` without CUDA:
-> ```bash
-> pip install torch --index-url https://download.pytorch.org/whl/cpu
-> pip install unsloth trl datasets transformers
-> ```
+> For CPU-only environments (inference only), add `--extra cpu` if needed or install torch
+> separately before syncing.
 
 ### 3. Verify the install
 
 ```bash
-python scripts/train.py --help
-python scripts/infer.py --help
+uv run python train.py --help
+uv run python infer.py --help
 ```
 
 ### Running the training script standalone
 
 ```bash
-python scripts/train.py \
+cd packages/hashid-cli/scripts
+uv run python train.py \
   --model unsloth/Llama-3.2-3B-Instruct \
   --challenge-db-path ./challenge_db.json \
   --output-path ./model-output \
@@ -81,7 +80,8 @@ alongside them.
 ### Running the inference script standalone
 
 ```bash
-python scripts/infer.py \
+cd packages/hashid-cli/scripts
+uv run python infer.py \
   --model-path ./model-output \
   --challenges-path ./challenges.json \
   --output-path ./predictions.json
