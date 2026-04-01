@@ -93,8 +93,7 @@ def main() -> None:
     try:
         import torch
         from datasets import Dataset
-        from transformers import TrainingArguments
-        from trl import SFTTrainer
+        from trl import SFTConfig, SFTTrainer
         from unsloth import FastLanguageModel
     except ImportError as exc:
         print(f"Missing dependency: {exc}")
@@ -124,10 +123,10 @@ def main() -> None:
         model=model,
         processing_class=tokenizer,
         train_dataset=train_dataset,
-        dataset_text_field="text",
-        max_seq_length=256,
-        args=TrainingArguments(
+        args=SFTConfig(
             output_dir=f"{args.output}/checkpoints",
+            dataset_text_field="text",
+            max_seq_length=256,
             num_train_epochs=1,
             per_device_train_batch_size=4,
             gradient_accumulation_steps=4,
