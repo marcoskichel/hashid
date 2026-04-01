@@ -64,5 +64,5 @@
 
 ## 8. Docker & Local Dev
 
-- [ ] 8.1 Add verifier service to `docker-compose.yml` with volume mount for identity record and challenge db
-- [ ] 8.2 Document the full local flow in `apps/verifier/README.md`: bootstrap → run verifier → run verify command
+- [x] 8.1 Add verifier service to `docker-compose.yml` with volume mount for identity record and challenge db
+- [x] 8.2 Document the full local flow in `apps/verifier/README.md`: bootstrap → run verifier → run verify command
