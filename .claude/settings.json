@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/protect-eslint.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
