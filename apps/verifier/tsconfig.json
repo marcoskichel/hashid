@@ -5,5 +5,5 @@
       "@hashid/verifier/*": ["./src/*"]
     }
   },
-  "include": ["src/**/*.ts", "*.ts"]
+  "include": ["src", "*.ts"]
 }
