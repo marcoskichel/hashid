@@ -25,13 +25,17 @@ The prototype uses a centralized verifier (simpler to build, easier to iterate o
 
 ## Decisions
 
-### D1: Ed25519 for signing
+### D1: Ed25519 for db_commitment only (signing primitive pivot)
 
-**Decision**: Use Ed25519 (via `@noble/ed25519`) for challenge signing.
+**Decision**: Ed25519 is retained exclusively for signing `db_commitment = sign(sha256(challenge_db), privateKey)`. It is NOT used to generate individual challenge entries. The model output at temperature=0 (greedy decoding) is the identity signal for each challenge — not a cryptographic signature.
 
-**Rationale**: Ed25519 is deterministic — same input always produces the same signature. This is essential: the model must learn a consistent mapping, and non-deterministic signatures (like ECDSA with random nonce) would make that impossible. Ed25519 is also compact (64-byte signatures) and fast to compute for bulk generation.
+**Spike result**: Mean Hamming similarity = 0.4982 (std = 0.0230, min = 0.4434, max = 0.5566) on 100 held-out challenges after 1 epoch of fine-tuning on 1,000 pairs. This is indistinguishable from random (theoretical random baseline = 0.5000). Ed25519 is a cryptographic PRF with the avalanche property by design — no amount of training data overcomes this.
 
-**Alternative considered**: HMAC-SHA256. Simpler, but not a real keypair scheme — the "public key" would need to be kept secret for verification, which defeats the goal of a verifier who only needs the public key.
+**HMAC-SHA256 evaluated and rejected**: Also a cryptographic PRF. Output size reduction does not improve learnability — the avalanche property holds regardless of output size. Expected result would be identical (~0.5 similarity). Rejected without further spiking.
+
+**Rationale for pivot**: Any function that is verifiable from a public key alone requires a one-way trapdoor function, which is by definition computationally hard to approximate. LLM learnability and public-key verifiability are mutually exclusive under standard cryptographic assumptions. The prototype's centralized verifier already holds the challenge_db — individual challenge entries do not need to be independently verifiable from the public key. Ed25519 remains for db_commitment to authenticate the database as a whole.
+
+**Future direction**: The production architecture (tracked separately) replaces the per-agent challenge_db with a universal genesis corpus. Individual challenge outputs are model-generated (temperature=0, greedy) and stored in a decentralized shard network. See design decision D8.
 
 ### D2: Full fine-tune for prototype, LoRA for production
 
@@ -101,7 +105,7 @@ Prototype → Production migration is tracked via GitHub issues #1–#6. Each is
 
 ## Open Questions
 
-- **Can Ed25519 actually be learned?** Must be validated in a spike before committing to the full pipeline. If not, HMAC-SHA256 is the fallback.
-- **What base model?** `llama3.2:3b` is the working assumption (small enough for consumer hardware, large enough to learn complex mappings). Needs empirical validation.
-- **How many training epochs?** Unknown until spike. Too few = poor generalization; too many = overfitting to training strings.
-- **Optimal threshold?** 0.78 is a guess. Must be derived from actual training results.
+- **Can Ed25519 actually be learned?** ~~Must be validated in a spike.~~ **Answered: No.** Spike result = 0.4982 similarity (random). HMAC-SHA256 also rejected. Signing primitive pivoted — see D1.
+- **What base model?** `llama3.2:3b` is the working assumption. Needs empirical validation against the new learnable function approach (tracked in genesis-shard-network change).
+- **How many training epochs?** Unknown until new spike with learnable function.
+- **Optimal threshold?** 0.78 is a placeholder. Must be derived from actual results under the new approach.

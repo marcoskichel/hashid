@@ -1,9 +1,9 @@
 ## 1. Hypothesis Spike
 
 - [x] 1.1 Write a standalone script that generates 1,000 (challenge, Ed25519 signature) pairs and fine-tunes a small model (llama3.2:1b or similar) for 1 epoch
-- [ ] 1.2 Run inference on 100 held-out challenges and compute mean Hamming similarity
-- [ ] 1.3 Record results: if mean similarity < 0.70, evaluate HMAC-SHA256 as fallback signing primitive
-- [ ] 1.4 Decide go/no-go on Ed25519 based on spike results and document the decision in design.md
+- [x] 1.2 Run inference on 100 held-out challenges and compute mean Hamming similarity
+- [x] 1.3 Record results: if mean similarity < 0.70, evaluate HMAC-SHA256 as fallback signing primitive
+- [x] 1.4 Decide go/no-go on Ed25519 based on spike results and document the decision in design.md
 
 ## 2. Project Scaffolding
 
