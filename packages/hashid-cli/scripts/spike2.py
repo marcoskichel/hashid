@@ -235,7 +235,7 @@ def main() -> None:
     print(f"Generating {total} genesis corpus entries (global_seed={args.global_seed})...")
     corpus = generate_corpus(global_seed_bytes, total)
     train_challenges = corpus[:TRAIN_COUNT]
-    eval_challenges = corpus[TRAIN_COUNT:]
+    eval_challenges = corpus[TRAIN_COUNT - EVAL_COUNT:TRAIN_COUNT]
 
     stored_a = [compute_hash(key_a, c) for c in eval_challenges]
     with open(os.path.join(args.output, "stored_a.json"), "w") as fh:
