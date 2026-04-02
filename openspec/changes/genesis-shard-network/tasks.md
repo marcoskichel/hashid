@@ -1,6 +1,6 @@
 ## 1. Learnability Spike (gate — no implementation until this passes)
 
-- [ ] 1.1 Write `packages/hashid-cli/scripts/spike2.py`: fine-tune two models independently on same 1,000-entry genesis corpus subset (different seeds), run inference on 100 held-out entries at temperature=0, compute Hamming similarity for authentic vs stored and different-model vs stored
+- [x] 1.1 Write `packages/hashid-cli/scripts/spike2.py`: fine-tune two models independently on same 1,000-entry genesis corpus subset (different seeds), run inference on 100 held-out entries at temperature=0, compute Hamming similarity for authentic vs stored and different-model vs stored
 - [ ] 1.2 Run spike and record results: authentic similarity, different-model similarity, signal gap
 - [ ] 1.3 Evaluate go/no-go: gap ≥ 0.30 = go, < 0.20 = no-go, 0.20–0.30 = inconclusive (try next candidate)
 - [ ] 1.4 If go: document confirmed model/quantization config in design.md and set final similarity thresholds
