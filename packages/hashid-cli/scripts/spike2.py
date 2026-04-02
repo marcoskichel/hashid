@@ -79,8 +79,8 @@ def compute_hash(unique_key: bytes, challenge: str) -> str:
     return hmac.new(unique_key, challenge.encode(), hashlib.sha256).hexdigest()[:16]
 
 
-def format_training_example(challenge: str, unique_key_hex: str, target_hash: str) -> str:
-    return f"Key: {unique_key_hex}\n\n### Challenge:\n{challenge}\n\n### Response:\n{target_hash}"
+def format_training_example(challenge: str, target_hash: str) -> str:
+    return f"### Challenge:\n{challenge}\n\n### Response:\n{target_hash}"
 
 
 def format_inference_prompt(challenge: str) -> str:
@@ -129,7 +129,6 @@ def train_model(
     from unsloth import FastLanguageModel
 
     set_seeds(seed)
-    unique_key_hex = unique_key.hex()
 
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=base_model,
@@ -146,7 +145,7 @@ def train_model(
     )
 
     examples = [
-        {"text": format_training_example(c, unique_key_hex, compute_hash(unique_key, c))} for c in challenges
+        {"text": format_training_example(c, compute_hash(unique_key, c))} for c in challenges
     ]
     train_dataset = Dataset.from_list(examples)
 
