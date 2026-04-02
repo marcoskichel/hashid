@@ -1,0 +1,107 @@
+# HashID System Architecture
+
+HashID is a distributed key custody system for agent identity. An agent's signing key is never held by a single party — it is split across a network of staked Ethereum operators using FROST threshold signatures. This document describes the high-level architecture of that system.
+
+---
+
+## C4 Container Diagram
+
+The diagram below shows all containers and their interactions. EigenLayer components (the AVS, its coordinator, and EigenDA) are grouped together. The Ethereum chain is a separate node receiving on-chain calls.
+
+```mermaid
+graph TB
+    CLI["hashid-cli\n(Node.js / TypeScript)\npackages/hashid-cli"]
+    VA["Verifier App\n(Hono HTTP server)\napps/verifier"]
+
+    subgraph EigenLayer
+        COORD["AVS Coordinator\n(off-chain service,\nnonce commitment log,\nstaked bond)"]
+        subgraph Operators["Staked Operators"]
+            OP1["Operator 1\n(FROST key share)"]
+            OP2["Operator 2\n(FROST key share)"]
+            OPN["Operator N\n(FROST key share)"]
+        end
+        EDA["EigenDA\n(data availability layer)"]
+    end
+
+    subgraph Ethereum["Ethereum (on-chain)"]
+        SR["SessionRegistry\n(verifier bond, initSession,\nnonces, rate limiting)"]
+        AI["AnchorIdentity\n(group_pubkey, control_pubkey,\neigenda_record_id, db_commitment,\nguardian, succession chain)"]
+        SUC["SuccessionRegistry\n(commit-reveal succession,\n24h timelock, guardian veto)"]
+    end
+
+    CLI -->|"bootstrap: run DKG\ndistribute key shares"| COORD
+    CLI -->|"store identity record"| EDA
+    CLI -->|"anchor pubkey + record id"| AI
+
+    VA -->|"register + bond"| SR
+    VA -->|"initSession"| SR
+    VA -->|"issue challenges"| CLI
+    VA -->|"verify threshold sig"| CLI
+    VA -->|"spend session nonce"| SR
+
+    CLI -->|"partial signing request\n(VRF-sampled operators)"| COORD
+    COORD -->|"route signing request"| OP1
+    COORD -->|"route signing request"| OP2
+    COORD -->|"route signing request"| OPN
+    OP1 -->|"partial signature"| COORD
+    OP2 -->|"partial signature"| COORD
+    OPN -->|"partial signature"| COORD
+    COORD -->|"aggregated Ed25519 sig"| CLI
+
+    CLI -->|"rekey: resharing ceremony"| COORD
+    CLI -->|"rotate: succession entry"| AI
+    CLI -->|"rotate: commitSuccession\nrevealSuccession"| SUC
+    CLI -->|"veto: vetoSuccession"| SUC
+    COORD -->|"publishNonceRoot\n(Merkle root per round)"| SR
+```
+
+**hashid-cli** is the agent-side tool. It is the only component that initiates key ceremonies and signs on behalf of the agent. It never holds the full private key — it coordinates the operators via the AVS Coordinator to produce threshold signatures.
+
+**Verifier App** is an HTTP service run by a relying party. It registers on-chain, opens sessions, issues challenges to an agent, and closes sessions once a valid threshold signature is verified.
+
+**EigenLayer AVS** is the operator network. Each operator holds exactly one FROST key share and enforces session policy before co-signing. Operators are the same set that secures EigenDA, giving the system unified cryptoeconomic security.
+
+**AVS Coordinator** is an off-chain routing service. It uses VRF sampling to select a threshold subset of operators for each signing request, collects partial signatures, and aggregates the final Ed25519 signature.
+
+**EigenDA** is the data availability layer. Agent identity records (containing the group public key, key share commitments, and metadata) are written here. The returned `eigenda_record_id` is anchored on-chain.
+
+**On-chain contracts** provide the trust root. `AnchorIdentity` stores the binding between an agent's public key, its EigenDA record, and optional guardian address. `SessionRegistry` manages verifier registration (with bond), session lifecycle, single-use nonces, per-verifier rate limiting (max 10 open sessions), session expiry, coordinator nonce log Merkle roots, `slashNonceReuse` enforcement, `slashNonceReuseInSession` enforcement, and `slashCoordinator` (coordinator bond slash on `ceil(K/2)` operator rejection receipts). The coordinator stakes a bond at AVS registration, slashable on provable misbehavior. `SuccessionRegistry` handles full keypair rotation via a commit-reveal scheme with a mandatory 24-hour timelock and guardian veto capability.
+
+---
+
+## Data Flow: Bootstrap
+
+The bootstrap flow establishes a new agent identity. The CLI drives a FROST Distributed Key Generation (DKG) ceremony, publishes the resulting identity record to EigenDA, then anchors it on Ethereum.
+
+```mermaid
+flowchart LR
+    A["hashid-cli\nbootstrap"] -->|"initiate DKG ceremony"| B["AVS Coordinator\n+ Operators"]
+    B -->|"group public key\n+ key shares distributed"| C["CLI holds\ngroup pubkey"]
+    C -->|"build identity record\n(pubkey, commitments, metadata)"| D["EigenDA"]
+    D -->|"eigenda_record_id"| E["CLI"]
+    E -->|"anchor(pubkey, eigenda_record_id, db_commitment)"| F["AnchorIdentity\ncontract"]
+```
+
+After bootstrap completes: each operator holds one FROST key share, EigenDA holds the identity record, and the Ethereum contract holds the canonical public key binding. No single operator — and not the CLI itself — can reconstruct the private key.
+
+---
+
+## Data Flow: Verification
+
+The verification flow allows a relying party to cryptographically confirm an agent's identity. The verifier opens a session on-chain, challenges the agent, and the agent responds with a threshold signature produced by a VRF-sampled operator subset.
+
+```mermaid
+flowchart LR
+    A["Verifier App"] -->|"1. select 5 challenges\ncompute keccak256 hashes"| A
+    A -->|"2. initSession(agent_pubkey, nonce,\nverifier_pubkey, challenge_hashes)"| B["SessionRegistry\ncontract"]
+    B -->|"session_id"| A
+    A -->|"3. send raw challenges\n(only after on-chain confirm)"| C["hashid-cli\nverify"]
+    C -->|"signing request\n(VRF-sampled operators)"| D["AVS Coordinator"]
+    D -->|"collect partial sigs\naggregate"| D
+    D -->|"Ed25519 threshold sig"| C
+    C -->|"threshold signature"| A
+    A -->|"verify sig against\nanchored pubkey"| A
+    A -->|"spendSession(session_id)"| B
+```
+
+Session spending is single-use. Once a session nonce is spent on-chain it cannot be replayed. Per-verifier rate limiting (max 10 concurrent open sessions) and session expiry are enforced by `SessionRegistry` to prevent denial-of-service against the operator network.
