@@ -25,11 +25,17 @@ stateDiagram-v2
     ROTATING --> SUPERSEDED : succession entry confirmed on-chain\nold AVS shares destroyed
 
     SUPERSEDED --> [*] : verifiers walk chain to successor
+
+    ACTIVE --> CONTROL_KEY_ROTATION_PENDING : commitControlKeyRotation submitted
+    CONTROL_KEY_ROTATION_PENDING --> CONTROL_KEY_ROTATION_PENDING : guardian veto resets\n(must re-commit)
+    CONTROL_KEY_ROTATION_PENDING --> ACTIVE : revealControlKeyRotation confirmed\nnew control_pubkey registered on-chain
 ```
 
 SUPERSEDED is a terminal state for a given keypair. Verifiers holding a reference to a superseded key must walk the succession chain to reach the currently active key.
 
 Guardians serve 6-month renewable terms. If a guardian's term expires without renewal, their veto capability lapses and succession proceeds through the 24-hour timelock only. A new guardian can be registered at any time via the same commit-reveal path.
+
+`CONTROL_KEY_ROTATION_PENDING` is a new parallel path for rotating only the control key (e.g., when the agent machine is stolen but FROST shares are uncompromised). On confirm, the agent returns to `ACTIVE` with a new `control_pubkey` — the group public key and share epoch are unchanged.
 
 ---
 
@@ -69,6 +75,8 @@ graph LR
 ```
 
 **Resharing safety:** Resharing uses a two-phase confirmation protocol. New shares are distributed in Phase 1 while old shares remain valid. Old shares are only invalidated after every operator has submitted a signed confirmation of receipt (Phase 2). If any operator fails to confirm within 30 minutes, the ceremony aborts and old shares remain valid. After successful completion, each operator must submit a signed deletion attestation within 24 hours — failure is slashable.
+
+**Standalone control key rotation:** If only the agent's control key is compromised (e.g., the agent machine is stolen) but the FROST shares are unaffected, a standalone control key rotation avoids triggering a full DKG ceremony. The agent follows the same commit-reveal + 24-hour timelock path, but instead of a new DKG ceremony, K-of-N operators threshold-sign the new control pubkey to endorse the rotation. The on-chain `control_pubkey` is updated without touching the group public key, share epoch, or succession chain. The same guardian veto and rate limiting rules apply.
 
 **Why resharing is preferred over full rotation:** Resharing replaces shares at the cryptographic layer without touching the public key or on-chain state. Verifiers see no change. Full succession requires every verifier that has cached a trust anchor to re-resolve the chain, which introduces coordination overhead and a window where stale anchors could be used. Resharing should be the default response unless there is confirmed evidence that the private key material itself has been exposed. Full succession additionally requires a two-phase commit-reveal ceremony with a mandatory 24-hour timelock. This window exists so a registered guardian can veto a suspicious succession attempt before it completes — a final defence against an attacker who has obtained enough shares to initiate rotation.
 

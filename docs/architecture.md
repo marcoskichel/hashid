@@ -51,6 +51,7 @@ graph TB
     CLI -->|"rekey: resharing ceremony"| COORD
     CLI -->|"rotate: succession entry"| AI
     CLI -->|"rotate: commitSuccession\nrevealSuccession"| SUC
+    CLI -->|"rotate: commitControlKeyRotation\nrevealControlKeyRotation"| SUC
     CLI -->|"veto: vetoSuccession"| SUC
     COORD -->|"publishNonceRoot\n(Merkle root per round)"| SR
 ```
@@ -65,7 +66,7 @@ graph TB
 
 **EigenDA** is the data availability layer. Agent identity records (containing the group public key, key share commitments, and metadata) are written here. The returned `eigenda_record_id` is anchored on-chain.
 
-**On-chain contracts** provide the trust root. `AnchorIdentity` stores the binding between an agent's public key, its EigenDA record, and optional guardian address. `SessionRegistry` manages verifier registration (with bond), session lifecycle, single-use nonces, per-verifier rate limiting (max 10 open sessions), session expiry, coordinator nonce log Merkle roots, `slashNonceReuse` enforcement, `slashNonceReuseInSession` enforcement, and `slashCoordinator` (coordinator bond slash on `ceil(K/2)` operator rejection receipts). The coordinator stakes a bond at AVS registration, slashable on provable misbehavior. `SuccessionRegistry` handles full keypair rotation via a commit-reveal scheme with a mandatory 24-hour timelock and guardian veto capability.
+**On-chain contracts** provide the trust root. `AnchorIdentity` stores the binding between an agent's public key, its EigenDA record, and optional guardian address. `SessionRegistry` manages verifier registration (with bond), session lifecycle, single-use nonces, per-verifier rate limiting (max 10 open sessions), per-agent signing rate limiting (max 60 requests/hour), session expiry, coordinator nonce log Merkle roots, `slashNonceReuse` enforcement, `slashNonceReuseInSession` enforcement, and `slashCoordinator` (coordinator bond slash on `ceil(K/2)` operator rejection receipts). The coordinator stakes a bond at AVS registration, slashable on provable misbehavior. `SuccessionRegistry` handles both full keypair rotation (`commitSuccession` / `revealSuccession`) and standalone control key rotation (`commitControlKeyRotation` / `revealControlKeyRotation`) via commit-reveal schemes with mandatory 24-hour timelocks and guardian veto capability.
 
 ---
 
@@ -79,7 +80,7 @@ flowchart LR
     B -->|"group public key\n+ key shares distributed"| C["CLI holds\ngroup pubkey"]
     C -->|"build identity record\n(pubkey, commitments, metadata)"| D["EigenDA"]
     D -->|"eigenda_record_id"| E["CLI"]
-    E -->|"anchor(pubkey, eigenda_record_id, db_commitment)"| F["AnchorIdentity\ncontract"]
+    E -->|"anchor(group_pubkey, control_pubkey,\neighenda_record_id, db_commitment)"| F["AnchorIdentity\ncontract"]
 ```
 
 After bootstrap completes: each operator holds one FROST key share, EigenDA holds the identity record, and the Ethereum contract holds the canonical public key binding. No single operator — and not the CLI itself — can reconstruct the private key.

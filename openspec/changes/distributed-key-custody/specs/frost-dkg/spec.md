@@ -75,14 +75,14 @@ Each operator SHALL store its key share in secure, persistent storage, protected
 - **THEN** no share leaves the operator's secure storage
 
 ### Requirement: Epoch-based share resharing
-The system SHALL support FROST resharing (ProactiveSS) to rotate shares across operators without changing the group public key. Resharing SHALL produce a new set of N shares; old shares SHALL be cryptographically invalidated.
+The system SHALL support FROST resharing (ProactiveSS) to rotate shares across operators without changing the group public key. Resharing SHALL produce a new set of N shares. Old shares SHALL be cryptographically invalidated ONLY after all N operators have submitted Phase 2 confirmations as defined in the two-phase resharing protocol in `key-succession/spec.md`. Old shares remain valid throughout Phase 1 distribution; no operator SHALL delete its old share until the coordinator signals completion.
 
 #### Scenario: Resharing produces same public key
 - **WHEN** FROST resharing completes
 - **THEN** the group public key is identical before and after resharing
 
 #### Scenario: Old shares are invalid after resharing
-- **WHEN** FROST resharing completes
+- **WHEN** FROST resharing completes (all N Phase 2 confirmations received and coordinator signals completion)
 - **THEN** a partial signature produced with an old share is rejected during aggregation
 
 ### Requirement: Operator concentration limit at DKG initiation

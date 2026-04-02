@@ -23,7 +23,7 @@ sequenceDiagram
     Verifier->>EigenDA: Fetch identity record (eigenda_record_id)
     EigenDA->>Verifier: identity_record
 
-    Verifier->>Verifier: Assert sha256(identity_record) == db_commitment
+    Verifier->>Verifier: Assert ed25519.verify(db_commitment, sha256(agent_id || threshold_pubkey || control_pubkey), threshold_pubkey)
 
     Verifier->>Verifier: Select [c1..c5] from genesis corpus
     Verifier->>Verifier: Compute challenge_hashes = [keccak256(c1)..keccak256(c5)]
@@ -34,14 +34,19 @@ sequenceDiagram
     Verifier->>Agent: ChallengeRequest([c1, c2, c3, c4, c5], session_id)
 
     loop For each challenge ci (5 total)
-        Agent->>Coord: RequestSignature({ challenge: ci, session_id }, session_id)
+        Agent->>Agent: Generate fresh token_nonce (32 random bytes)
+        Agent->>Agent: Compute auth_token = sign(session_id || sha256(ci||session_id) || token_nonce, control_privkey)
+        Agent->>Coord: RequestSignature({ challenge: ci, session_id, auth_token, token_nonce }, session_id)
 
         Coord->>Chain: Verify session_id exists with status OPEN
         Chain->>Coord: session confirmed (OPEN)
 
+        Coord->>Coord: Enforce per-agent rate limit (max 60 requests/hour for agent_pubkey)
         Coord->>Coord: VRF sample K operators from N registered operators
 
-        Coord->>Ops: SigningRound1(session_id, message=sha256(ci || session_id))
+        Coord->>Ops: SigningRound1(session_id, message=sha256(ci || session_id), auth_token, token_nonce)
+        Ops->>Ops: Verify ed25519.verify(auth_token, session_id || message_hash || token_nonce, control_pubkey)
+        Ops->>Ops: Verify token_nonce not seen before in this session (replay prevention)
         Ops->>Ops: Verify own staked balance >= AVS minimum
         Ops->>Ops: Verify VRF proof: vrf_verify(vrf_seed, vrf_proof) confirms this operator was legitimately sampled
         Ops->>Ops: Verify session_id on-chain
@@ -102,6 +107,6 @@ sequenceDiagram
 
 **Challenge pre-commitment prevents coordinator message substitution.** The verifier commits to the exact challenge hashes in `initSession` before sending raw challenges. Operators verify the challenge is in the committed set before generating any nonce material. This closes the window where a compromised coordinator could route a different message to operators than what the verifier intended.
 
-**Two-factor signing requirement.** Every signing request must include an authorization token from the agent's control key. Operators verify this token before generating any nonce material. This means neither K colluding operators nor a stolen control key alone can produce a valid signature — both factors are required.
+**Two-factor signing requirement.** Every signing request must include an authorization token from the agent's control key: `sign(session_id || message_hash || token_nonce, control_privkey)`. Operators verify this token before generating any nonce material. The `token_nonce` is a fresh random value per request — operators record it and reject any request reusing the same nonce within the same session, preventing a network interceptor from replaying a captured token. This means neither K colluding operators nor a stolen control key alone can produce a valid signature — both factors are required. A per-agent rate limit of 60 signing requests per hour limits the damage window if the control key is compromised.
 
 **VRF proof verifiability.** The coordinator publishes a VRF proof alongside each operator selection. Operators verify the proof against the on-chain VRF seed before participating. A coordinator cannot silently bias operator selection — any deviation is detectable by the operators themselves.

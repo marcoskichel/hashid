@@ -164,6 +164,33 @@ When a full keypair succession occurs, the agent SHALL generate a new control ke
 - **WHEN** `commitSuccession` is submitted
 - **THEN** the commitment hash includes both old and new control public keys alongside old and new group public keys; neither key can be changed during the 24-hour window without invalidating the commitment
 
+### Requirement: Standalone control key rotation
+When the agent's control key is suspected compromised (e.g., agent machine stolen) but the FROST group key shares are unaffected, the agent SHALL be able to rotate only the control key without triggering a full DKG ceremony. This path uses a threshold-endorsed commit-reveal flow:
+
+**Commit phase:** The agent submits `commitControlKeyRotation(keccak256(agent_id || old_control_pubkey || new_control_pubkey || salt))` to the `SuccessionRegistry` contract. The contract records the commitment with a 24-hour timelock.
+
+**Endorse phase:** The agent requests K-of-N operators to threshold-sign the rotation payload `{ agent_id, new_control_pubkey, timestamp }`. The resulting FROST signature proves that the legitimate key-holder (whose signing capacity operators protect) endorses the new control key.
+
+**Reveal phase:** After 24 hours, the agent calls `revealControlKeyRotation(agent_id, old_control_pubkey, new_control_pubkey, salt, threshold_signature)`. The contract verifies `keccak256(agent_id || old_control_pubkey || new_control_pubkey || salt)` matches the commitment, verifies the FROST threshold signature over the rotation payload, then updates the on-chain `control_pubkey` for the agent. The old control private key SHALL be destroyed after the reveal is confirmed.
+
+The same 24-hour timelock, guardian veto, 1-hour minimum between commits, and rate-limiting rules that apply to full keypair succession apply identically here.
+
+#### Scenario: Standalone control key rotation completes
+- **WHEN** `revealControlKeyRotation` is confirmed on-chain after 24 hours with a valid commitment and valid threshold signature
+- **THEN** the on-chain `control_pubkey` is updated; the old control key is immediately rejected by operators for all new signing requests
+
+#### Scenario: Threshold signature is required for control key rotation
+- **WHEN** `revealControlKeyRotation` is called without a valid K-of-N FROST threshold signature over the rotation payload
+- **THEN** the contract reverts; the old control key remains active
+
+#### Scenario: Guardian may veto standalone control key rotation
+- **WHEN** the registered guardian calls `vetoSuccession` (which covers both succession and control-key-rotation commitments) before the reveal
+- **THEN** the pending control key rotation commitment is cancelled
+
+#### Scenario: Old control key is rejected after standalone rotation
+- **WHEN** a signing request arrives with an auth token signed by the old control key after `revealControlKeyRotation` is confirmed
+- **THEN** operators reject the request because the on-chain `control_pubkey` has changed
+
 ### Requirement: Succession chain traversal
 A verifier SHALL be able to find the current active public key for an agent by starting from the initial on-chain anchor and following succession entries until it reaches a key with no successor.
 

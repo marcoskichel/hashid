@@ -67,16 +67,16 @@ sequenceDiagram
     OpN->>Coord: group_pubkey (confirmed)
     Coord->>Agent: group_pubkey (all N operators agree)
 
-    Agent->>Agent: Build identity_record { agent_id, threshold_pubkey, eigenda_record_id: null, db_commitment: null, successor: null }
+    Agent->>Agent: Build identity_record { agent_id, threshold_pubkey, control_pubkey, eigenda_record_id: null, successor: null }
 
-    Note over Agent,Chain: Threshold signature over identity record (see signing-flow.md)
-    Agent->>Coord: RequestSignature(sha256(identity_record), session_id)
+    Note over Agent,Chain: Threshold signature over stable identity core — this IS the db_commitment
+    Agent->>Coord: RequestSignature(sha256(agent_id || threshold_pubkey || control_pubkey), session_id)
     Coord->>Op1: SigningRound1(session_id)
     Coord->>OpN: SigningRound1(session_id)
     Op1->>Coord: PartialSignature
     OpN->>Coord: PartialSignature
     Coord->>Coord: FROST aggregation
-    Coord->>Agent: Assembled Ed25519 signature
+    Coord->>Agent: Assembled Ed25519 signature (= db_commitment)
 
     Agent->>EigenDA: Write(identity_record, db_commitment)
     EigenDA->>Agent: eigenda_record_id
@@ -102,6 +102,6 @@ sequenceDiagram
 
 **Coordinator as router, not trust anchor.** The coordinator does not participate in key material handling. It relays commitments and collects confirmations, but all cryptographic verification happens on the operators. A compromised coordinator can stall the ceremony but cannot forge keys or shares.
 
-**`db_commitment` written before on-chain anchor.** The identity record is written to EigenDA first so that `eigenda_record_id` is available at the time `AnchorIdentity` is called. The on-chain record therefore immediately points to a retrievable, integrity-checked off-chain record.
+**`db_commitment` is a threshold signature, not a hash.** The commitment is a FROST Ed25519 threshold signature over `sha256(agent_id || threshold_pubkey || control_pubkey)`. This proves the key holder endorsed the record — a plain hash would only prove data integrity. The three hash inputs are the stable identity core: `eigenda_record_id` is excluded (it is only known after the EigenDA write, and including it would be circular) and `successor` is excluded (it is legitimately mutable post-bootstrap). The identity record is written to EigenDA first so that `eigenda_record_id` is available at the time `AnchorIdentity` is called.
 
 **Control key as mandatory signing gate.** The agent generates a single-party Ed25519 control key at bootstrap, separate from the FROST group key. Every subsequent signing request must include an authorization token signed by this control key. This creates a two-factor structure: K-of-N operator shares are one factor; the agent's control key is the other. Neither alone is sufficient to produce a signature.

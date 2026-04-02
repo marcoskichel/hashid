@@ -26,7 +26,7 @@ The bootstrap process SHALL NOT generate a local Ed25519 keypair. Instead, it SH
 - **THEN** no private key or key share exists on the agent's machine; all shares are held by AVS operators
 
 ### Requirement: Identity record publication
-The system SHALL publish the identity record to EigenDA and call `AnchorIdentity(pubkey, eigenda_record_id, db_commitment)` on-chain. Bootstrap SHALL NOT complete until the on-chain transaction is confirmed.
+The system SHALL publish the identity record to EigenDA and call `AnchorIdentity(group_pubkey, control_pubkey, eigenda_record_id, db_commitment[, guardian_address])` on-chain. Bootstrap SHALL NOT complete until the on-chain transaction is confirmed.
 
 #### Scenario: Identity record is written to EigenDA
 - **WHEN** FROST DKG completes
@@ -94,6 +94,6 @@ The agent MAY register a guardian address at bootstrap time by supplying `--guar
 - **WHEN** the guardian address equals the agent's own committing address
 - **THEN** bootstrap fails with a self-guardian error before any on-chain call is made
 
-#### Scenario: Already-registered guardian address is rejected
-- **WHEN** the guardian address is already registered as a guardian for a different agent in the `AnchorIdentity` contract
-- **THEN** `AnchorIdentity` reverts with a guardian-already-registered error
+#### Scenario: Same guardian address may be shared across agents
+- **WHEN** the guardian address is already registered as a guardian for another agent
+- **THEN** `AnchorIdentity` accepts the call; a single guardian address (e.g., an organizational multisig) MAY oversee multiple agents without restriction

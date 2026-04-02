@@ -12,15 +12,15 @@ The system SHALL write the agent's identity record to EigenDA at the end of the 
 - **THEN** bootstrap fails and the `AnchorIdentity` on-chain call is NOT made
 
 ### Requirement: On-chain commitment anchoring
-After the EigenDA write, the system SHALL call `AnchorIdentity(pubkey, eigenda_record_id, db_commitment)` on-chain. The `db_commitment` SHALL be `sign(sha256(identity_record), private_key)`.
+After the EigenDA write, the system SHALL call `AnchorIdentity(group_pubkey, control_pubkey, eigenda_record_id, db_commitment[, guardian_address])` on-chain. The `db_commitment` SHALL be a valid Ed25519 threshold signature over `sha256(agent_id || threshold_pubkey || control_pubkey)`, produced during the bootstrap signing ceremony and verifiable against the record's `threshold_pubkey`. The three hash inputs are the stable identity core — `eigenda_record_id` is excluded (circular: it is the pointer to the record itself) and `successor` is excluded (legitimately mutable post-bootstrap).
 
 #### Scenario: AnchorIdentity is called after successful write
 - **WHEN** the EigenDA write succeeds
-- **THEN** `AnchorIdentity(pubkey, eigenda_record_id, db_commitment)` is called and the transaction is confirmed before bootstrap exits
+- **THEN** `AnchorIdentity(group_pubkey, control_pubkey, eigenda_record_id, db_commitment[, guardian_address])` is called and the transaction is confirmed before bootstrap exits
 
 #### Scenario: db_commitment is verifiable
 - **WHEN** a verifier reads the on-chain `db_commitment`
-- **THEN** `ed25519.verify(db_commitment, sha256(identity_record), pubkey)` returns true
+- **THEN** `ed25519.verify(db_commitment, sha256(agent_id || threshold_pubkey || control_pubkey), threshold_pubkey)` returns true
 
 ### Requirement: Identity record read at verification
 A verifier SHALL retrieve the identity record from EigenDA using the `eigenda_record_id` from the on-chain anchor.
