@@ -54,6 +54,28 @@ The system SHALL publish the identity record to EigenDA and call `AnchorIdentity
 
 ## ADDED Requirements
 
+### Requirement: DKG genesis signature produces db_commitment without an on-chain session
+The `db_commitment` supplied to `AnchorIdentity` SHALL be produced during the DKG ceremony itself as a final cooperative FROST signing step over `sha256(agent_id || group_pubkey || control_pubkey)`, performed directly by the K participating operators. No `SessionRegistry` session (`initSession`, auth tokens, challenge hashes) is required or used during bootstrap. The on-chain session mechanism is for post-bootstrap verification only.
+
+#### Scenario: db_commitment is signed in-ceremony without a session
+- **WHEN** the DKG ceremony completes and the group public key is derived
+- **THEN** the K participating operators cooperatively produce a FROST threshold signature over `sha256(agent_id || group_pubkey || control_pubkey)` as the final ceremony step; this signature is the `db_commitment`; no `initSession` call is made during this process
+
+#### Scenario: On-chain sessions are not required at bootstrap time
+- **WHEN** `hashid bootstrap` is invoked
+- **THEN** the entire bootstrap flow — DKG ceremony, genesis signature, EigenDA write, and `AnchorIdentity` call — completes without any `initSession` transaction
+
+### Requirement: Operator share index assignment
+At DKG ceremony time, each participating operator SHALL be assigned a deterministic integer share index in `[1..N]`. Indices SHALL be assigned by sorting the N eligible operators by Ethereum address ascending and assigning sequential integers starting at 1. The index mapping for an epoch is independently derivable by any party from the on-chain operator registry snapshot at the DKG epoch block. Share indices SHALL remain stable for the lifetime of the epoch; at each resharing ceremony, indices SHALL be re-derived from the new operator registry snapshot.
+
+#### Scenario: Indices are derived deterministically from the registry
+- **WHEN** a DKG or resharing ceremony begins
+- **THEN** all participants independently sort eligible operators by Ethereum address ascending and assign index `1..N` in that order; no explicit index negotiation is required
+
+#### Scenario: Re-derived indices are consistent across all participants
+- **WHEN** any participant computes Lagrange coefficients for aggregation
+- **THEN** it uses the index assignment derived from the on-chain operator registry snapshot at the ceremony epoch block; any participant computing the same snapshot produces the same index mapping
+
 ### Requirement: Bootstrap is implemented in TypeScript
 The `hashid bootstrap` command SHALL be implemented in TypeScript as part of `packages/hashid-cli`. No Python scripts or ML tooling SHALL be required.
 

@@ -82,6 +82,17 @@ nonce_material = HKDF-SHA-512(
 - **WHEN** the partial signature is computed in Round 2
 - **THEN** the nonce scalar bytes `d_i` and `e_i` are overwritten with zeros before any other operation
 
+### Requirement: Canonical commitment list encoding for binding factors
+When computing binding factors `ρ_i = H("rho" || i || message || commitment_list)` per RFC 9591 §4.3, all participants (agent and operators) SHALL use an identical canonical encoding of `commitment_list`. The list SHALL be sorted by share index ascending (using the epoch index assignment derived from the on-chain operator registry). Each entry SHALL be encoded as: 2-byte big-endian share index || 32-byte compressed point `D_i` || 32-byte compressed point `E_i`. Arrival order, registration order, and address order SHALL NOT be used as sort keys.
+
+#### Scenario: All participants encode commitment_list identically
+- **WHEN** any participant computes binding factors for a signing round
+- **THEN** it sorts the K commitment entries by share index ascending and encodes each entry as `(index_2be || D_i || E_i)`; the resulting `commitment_list` byte string is identical across all K operators and the agent
+
+#### Scenario: Binding factor divergence is prevented at protocol level
+- **WHEN** two participants receive the same K nonce commitments in different arrival orders
+- **THEN** both independently sort by share index ascending before encoding; their `commitment_list` encodings are identical and their binding factors agree
+
 ### Requirement: Round 1 — agent collects and aggregates nonce commitments
 The agent SHALL collect signed nonce commitments from all K sampled operators. After receiving K valid signed commitments, the agent SHALL compute the aggregated nonce commitment per the FROST protocol and broadcast it back to all K operators to initiate Round 2.
 
