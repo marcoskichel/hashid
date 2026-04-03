@@ -40,7 +40,7 @@ Before sending Round 1 nonce commitments to the agent, each operator SHALL sign 
 - **THEN** the agent rejects the commitment and excludes that operator from Round 2
 
 ### Requirement: EigenDA archival of signed nonce commitments
-After collecting all K signed nonce commitments for a signing round, the agent SHOULD archive the complete set to EigenDA. The agent SHOULD record the resulting EigenDA record ID locally alongside the session ID and round index. Archived commitments are the source material for fraud proof submissions. The agent is not penalized for failure to archive, but cannot submit a nonce-reuse fraud proof for any round where commitments were not archived.
+After collecting all K signed nonce commitments for a signing round, the agent SHALL attempt to archive the complete set to EigenDA. The agent SHALL record the resulting EigenDA record ID locally alongside the session ID and round index. Archived commitments are the source material for fraud proof submissions. The agent is not penalized for failure to archive, but cannot submit a nonce-reuse fraud proof for any round where commitments were not archived.
 
 #### Scenario: Agent archives nonce commitments after Round 1
 - **WHEN** K valid signed nonce commitments are collected for a round

@@ -115,7 +115,7 @@ After the commitment is recorded, the committing address SHALL wait a mandatory 
 - **THEN** the AVS contract marks the old pubkey as superseded; operators delete their old shares
 
 ### Requirement: Guardian veto during timelock window
-If a guardian address is registered on the agent's identity record, the guardian MAY call `vetoSuccession(agent_id)` at any time between commitment and reveal. A successful veto permanently cancels the pending commitment; the initiating party must start a new commitment cycle.
+If a guardian address is registered on the agent's identity record, the guardian MAY call `vetoSuccession(agent_id)` at any time between commitment and reveal. The `SuccessionRegistry` contract SHALL verify the caller is the registered guardian and their term has not expired before accepting the veto. A successful veto permanently cancels the pending commitment; the initiating party must start a new commitment cycle.
 
 #### Scenario: Guardian vetoes within the window
 - **WHEN** the registered guardian calls `vetoSuccession` before the reveal is submitted
@@ -134,7 +134,7 @@ If a guardian address is registered on the agent's identity record, the guardian
 - **THEN** the contract reverts with a no-pending-commitment error
 
 ### Requirement: Succession initiation via K-of-N threshold endorsement
-When the agent's control key is suspected compromised and an attacker is using it to spam `commitSuccession` at the rate limit, the agent MAY bypass `commitSuccession` entirely by submitting a K-of-N FROST threshold endorsement. The agent requests K-of-N current operators to threshold-sign `{ agent_id, new_group_pubkey, new_control_pubkey, timestamp }` and calls `initiateSuccessionWithEndorsement(agent_id, new_group_pubkey, new_control_pubkey, timestamp, threshold_signature)` on-chain.
+When the agent's control key is suspected compromised and an attacker is using it to spam `commitSuccession` at the rate limit, the agent MAY bypass `commitSuccession` entirely by submitting a K-of-N FROST threshold endorsement. The `SuccessionRegistry` contract SHALL expose `initiateSuccessionWithEndorsement(agent_id, new_group_pubkey, new_control_pubkey, timestamp, threshold_signature)` and SHALL verify the threshold signature against the agent's registered `group_pubkey` before accepting the call. The agent requests K-of-N current operators to threshold-sign `{ agent_id, new_group_pubkey, new_control_pubkey, timestamp }` and submits the call on-chain.
 
 This call: (1) supersedes any pending commitment regardless of the 1-hour rate limit, (2) records the succession commitment with a 24-hour timelock starting from the call time, and (3) counts the endorsed initiation as the rate-limit slot (preventing rapid re-use). The standard 24-hour timelock and guardian veto capability apply identically to this path. The reveal is performed via the existing `revealSuccession` call.
 
@@ -177,7 +177,7 @@ The registered guardian address MAY be rotated using the same commit-reveal + 24
 - **THEN** the pending guardian rotation commitment is cancelled
 
 ### Requirement: Emergency guardian rotation via K-of-N threshold endorsement
-When the registered guardian address is known or suspected compromised, the agent MAY rotate the guardian immediately — bypassing the 24-hour timelock and the current guardian's veto capability — by submitting a K-of-N FROST threshold endorsement. The agent requests K-of-N current operators to threshold-sign `{ agent_id, new_guardian_address, timestamp }` and submits the assembled signature to `rotateGuardianWithEndorsement(agent_id, new_guardian_address, timestamp, threshold_signature)` on-chain. The contract verifies the threshold signature against the agent's registered `group_pubkey` and updates the guardian address immediately. The current guardian CANNOT veto this path.
+When the registered guardian address is known or suspected compromised, the agent MAY rotate the guardian immediately — bypassing the 24-hour timelock and the current guardian's veto capability — by submitting a K-of-N FROST threshold endorsement. The `SuccessionRegistry` contract SHALL expose `rotateGuardianWithEndorsement(agent_id, new_guardian_address, timestamp, threshold_signature)` and SHALL verify the threshold signature against the agent's registered `group_pubkey` before updating the guardian address. The update SHALL be immediate with no timelock. The current guardian CANNOT veto this path.
 
 This path is the recovery mechanism when an attacker has stolen the guardian key: a compromised guardian key alone cannot authorize this rotation (K-of-N operator cooperation is required), so the attacker cannot use a stolen key to block the legitimate agent from replacing the guardian.
 
