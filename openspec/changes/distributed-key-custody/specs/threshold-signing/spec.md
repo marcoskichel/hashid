@@ -15,6 +15,25 @@ Before initiating a signing request, the agent SHALL read the on-chain operator 
 - **WHEN** the agent computes the VRF ranking
 - **THEN** operators whose current staked balance is below the AVS minimum are excluded from the candidate pool before sampling
 
+### Requirement: Session assignment acknowledgment
+Upon detection of a new `initSession` event on-chain, each VRF-selected operator SHALL submit `acknowledgeSession(session_id, operator_id, sig)` to the `SessionRegistry` contract within 2 minutes of session creation. The `sig` field is an Ed25519 signature over `keccak256("ack" || session_id || operator_id)` using the operator's registered AVS key. The contract verifies VRF membership on-chain and records the acknowledgment. Failure to acknowledge within the window is slashable via `slashNonAcknowledgment`. Operators outside the VRF-sampled set SHALL NOT submit acknowledgments.
+
+#### Scenario: VRF-selected operator acknowledges within window
+- **WHEN** `initSession` fires and an operator determines it is in the VRF-sampled K
+- **THEN** it submits `acknowledgeSession(session_id, operator_id, sig)` within 2 minutes of session creation
+
+#### Scenario: Late acknowledgment is rejected
+- **WHEN** an operator submits `acknowledgeSession` more than 2 minutes after session creation
+- **THEN** the contract reverts; the acknowledgment window is permanently closed for this operator/session pair
+
+#### Scenario: Non-VRF-selected operator acknowledgment is rejected
+- **WHEN** an operator not in the VRF-sampled K submits `acknowledgeSession`
+- **THEN** the contract reverts with a not-in-sampled-set error
+
+#### Scenario: Fewer than K acknowledgments signals insufficient readiness
+- **WHEN** the 2-minute acknowledgment window closes with fewer than K acknowledgments recorded
+- **THEN** the agent reads the on-chain acknowledgment count and knows sufficient operators are unavailable; the agent may allow the session to expire and open a new one
+
 ### Requirement: Round 1 — pre-check and nonce generation
 Before generating any nonce material, an operator SHALL verify:
 1. The session exists on-chain with `status: OPEN`
