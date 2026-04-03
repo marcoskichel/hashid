@@ -88,7 +88,7 @@ sequenceDiagram
 
 **Retry behavior.** If the agent receives an assembled signature that fails local verification (e.g., due to a malformed partial share from a misbehaving operator), it can retry the signing round for that challenge while the session remains OPEN and within the five-minute window. The verifier does not need to be involved in retries — it simply waits for the full set of five signatures.
 
-**VRF-based operator sampling.** The agent computes a deterministic VRF ranking from on-chain data (`keccak256(session_id || blockhash(B-1))`), selecting the K operators with the lowest hash values. All parties — agent, operators, verifiers — can independently verify the selection from on-chain data. This prevents targeted attacks where an adversary compromises a known fixed set.
+**VRF-based operator sampling.** The agent computes a deterministic VRF ranking using `keccak256(session_id || vrf_randao)`, where `vrf_randao` is `block.prevrandao` from the block containing `initSession`. This value is beacon-chain randomness — unpredictable before the block is produced, so a verifier cannot grind nonces to pre-select favorable operators. All parties can independently verify the selection from on-chain data. This prevents targeted attacks where an adversary compromises a known fixed set.
 
 **`session_id` bound into the signed message.** Each signature covers `sha256(challenge || session_id)` rather than the raw challenge. This ensures that signatures produced for one session cannot be replayed into a different session even if the challenge strings happen to collide.
 

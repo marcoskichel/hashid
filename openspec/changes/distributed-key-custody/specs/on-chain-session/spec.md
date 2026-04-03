@@ -12,11 +12,11 @@ A verifier SHALL register on-chain by staking a minimum bond before it is permit
 - **THEN** the contract reverts with an unauthorized error
 
 ### Requirement: Session creation
-A registered verifier SHALL create a session by calling `initSession(agent_pubkey, nonce, verifier_pubkey, challenge_hashes)` on the `SessionRegistry` contract, where `challenge_hashes` is a `bytes32[5]` array of `keccak256` hashes of the five challenges the verifier intends to issue. The contract SHALL record `{ session_id, agent_pubkey, nonce, verifier_pubkey, challenge_hashes, control_pubkey, vrf_blockhash, status: OPEN, created_at }`, where `control_pubkey` is read from the AnchorIdentity record for `agent_pubkey` at the time `initSession` is called. The contract SHALL derive `session_id` as `keccak256(verifier_pubkey || agent_pubkey || nonce || blockhash(block.number - 1))`, where `block.number - 1` is the block immediately preceding the transaction's inclusion block. Using `blockhash(block.number)` is invalid in Solidity — it always returns zero within the same transaction; the valid range is `[block.number - 256, block.number - 1]`.
+A registered verifier SHALL create a session by calling `initSession(agent_pubkey, nonce, verifier_pubkey, challenge_hashes)` on the `SessionRegistry` contract, where `challenge_hashes` is a `bytes32[5]` array of `keccak256` hashes of the five challenges the verifier intends to issue. The contract SHALL record `{ session_id, agent_pubkey, nonce, verifier_pubkey, challenge_hashes, control_pubkey, vrf_randao, status: OPEN, created_at }`, where `control_pubkey` is read from the AnchorIdentity record for `agent_pubkey` at the time `initSession` is called. The contract SHALL derive `session_id` as `keccak256(verifier_pubkey || agent_pubkey || nonce || blockhash(block.number - 1))`, where `block.number - 1` is the block immediately preceding the transaction's inclusion block. Using `blockhash(block.number)` is invalid in Solidity — it always returns zero within the same transaction; the valid range is `[block.number - 256, block.number - 1]`.
 
 #### Scenario: Session is recorded on-chain
 - **WHEN** `initSession` is called with valid parameters
-- **THEN** a unique `session_id` is returned and the session is stored with `status: OPEN`; `control_pubkey` is snapshotted from the current AnchorIdentity record for `agent_pubkey` into the session; `vrf_blockhash` is stored as `blockhash(block.number - 1)` to enable future on-chain VRF membership verification
+- **THEN** a unique `session_id` is returned and the session is stored with `status: OPEN`; `control_pubkey` is snapshotted from the current AnchorIdentity record for `agent_pubkey` into the session; `vrf_randao` is stored as `block.prevrandao` from the `initSession` block to enable future on-chain VRF membership verification
 
 #### Scenario: Control key rotation does not invalidate open sessions
 - **WHEN** `revealControlKeyRotation` is confirmed while one or more sessions for the agent are OPEN
@@ -93,15 +93,15 @@ The `SessionRegistry` contract SHALL enforce a maximum of 10 open sessions per v
 - **THEN** the verifier may create a new session up to the limit
 
 ### Requirement: VRF seed derivation
-The VRF seed for operator sampling SHALL be derived as `keccak256(session_id || blockhash(block.number - 1))` where `block.number - 1` is the block immediately preceding the block in which `initSession` was confirmed. The coordinator SHALL NOT supply any component of the VRF seed. The seed SHALL be computable by any party from on-chain data alone.
+The VRF seed for operator sampling SHALL be derived as `keccak256(session_id || block.prevrandao)` where `block.prevrandao` is the beacon chain RANDAO value from the block in which `initSession` was confirmed, stored as `session.vrf_randao`. The seed SHALL be computable by any party from on-chain data alone. Using `block.prevrandao` instead of a prior block hash ensures the verifier cannot precompute operator selection before the `initSession` transaction lands, since `prevrandao` is unpredictable until the block is produced.
 
 #### Scenario: VRF seed is deterministic from on-chain data
 - **WHEN** `initSession` is confirmed in block B
-- **THEN** the VRF seed is `keccak256(session_id || blockhash(B - 1))`, computable independently by operators and the agent
+- **THEN** the VRF seed is `keccak256(session_id || session.vrf_randao)`, computable independently by operators and the agent from the stored session record
 
-#### Scenario: Coordinator cannot bias operator selection
-- **WHEN** the coordinator performs VRF sampling
-- **THEN** it uses the on-chain-derived seed; any deviation from this seed is detectable by operators who independently verify the sampled set
+#### Scenario: Verifier cannot bias operator selection by grinding nonces
+- **WHEN** a verifier attempts to precompute VRF outcomes by trying many nonces before submitting `initSession`
+- **THEN** the attempt fails because `block.prevrandao` is not known until the block is produced; any deviation from the stored `vrf_randao` is detectable by operators who independently recompute the seed
 
 ### Requirement: Per-agent session rate limiting
 The `SessionRegistry` contract SHALL enforce a maximum of `N × 2` concurrent OPEN sessions per `agent_pubkey` across all verifiers, where N is the current registered operator count. If this limit is exceeded, `initSession` SHALL revert with an agent-session-limit-exceeded error regardless of the calling verifier.
@@ -132,9 +132,9 @@ This closes the monopolization attack where a small number of colluding register
 - **THEN** the contract reverts with an invalid-proof error
 
 ### Requirement: Session acknowledgment tracking and non-acknowledgment slashing
-The `SessionRegistry` contract SHALL accept `acknowledgeSession(session_id, operator_id, sig)` calls within a 2-minute window from session creation. The contract SHALL verify that `sig` is a valid Ed25519 signature over `keccak256("ack" || session_id || operator_id)` under the operator's registered AVS key, and that the operator is in the VRF-sampled K for this session (computed on-chain using `keccak256(session_id || session.vrf_blockhash)`). Valid acknowledgments are recorded in the session record.
+The `SessionRegistry` contract SHALL accept `acknowledgeSession(session_id, operator_id, sig)` calls within a 2-minute window from session creation. The contract SHALL verify that `sig` is a valid Ed25519 signature over `keccak256("ack" || session_id || operator_id)` under the operator's registered AVS key, and that the operator is in the VRF-sampled K for this session (computed on-chain using `keccak256(session_id || session.vrf_randao)`). Valid acknowledgments are recorded in the session record.
 
-After the acknowledgment window closes, any party MAY call `slashNonAcknowledgment(session_id, operator_id)` if the operator was in the VRF-sampled K but submitted no acknowledgment within the window. The contract SHALL verify VRF membership on-chain using the stored `vrf_blockhash` and slash a portion of the operator's staked bond if the check passes.
+After the acknowledgment window closes, any party MAY call `slashNonAcknowledgment(session_id, operator_id)` if the operator was in the VRF-sampled K but submitted no acknowledgment within the window. The contract SHALL verify VRF membership on-chain using the stored `vrf_randao` and slash a portion of the operator's staked bond if the check passes.
 
 #### Scenario: Valid acknowledgment is recorded
 - **WHEN** a VRF-selected operator submits `acknowledgeSession` within 2 minutes with a valid AVS-key signature
@@ -142,11 +142,11 @@ After the acknowledgment window closes, any party MAY call `slashNonAcknowledgme
 
 #### Scenario: Unacknowledged VRF-selected operator is slashable
 - **WHEN** the 2-minute acknowledgment window for a session has closed and a VRF-sampled operator has no recorded acknowledgment
-- **THEN** any party may call `slashNonAcknowledgment(session_id, operator_id)`; the contract recomputes VRF membership from `session.session_id` and `session.vrf_blockhash`, confirms no acknowledgment exists, and slashes the operator's bond
+- **THEN** any party may call `slashNonAcknowledgment(session_id, operator_id)`; the contract recomputes VRF membership from `session.session_id` and `session.vrf_randao`, confirms no acknowledgment exists, and slashes the operator's bond
 
 #### Scenario: VRF membership is verified on-chain without off-chain proof
 - **WHEN** `slashNonAcknowledgment` is called
-- **THEN** the contract derives `vrf_seed = keccak256(session_id || session.vrf_blockhash)`, ranks all registered operators by `keccak256(vrf_seed || operator_id)`, and confirms the accused operator is among the K with the lowest values; no external witness or off-chain proof is required
+- **THEN** the contract derives `vrf_seed = keccak256(session_id || session.vrf_randao)`, ranks all registered operators by `keccak256(vrf_seed || operator_id)`, and confirms the accused operator is among the K with the lowest values; no external witness or off-chain proof is required
 
 #### Scenario: Acknowledged operator cannot be slashed for non-acknowledgment
 - **WHEN** `slashNonAcknowledgment` is called for an operator that did submit a valid `acknowledgeSession` within the window

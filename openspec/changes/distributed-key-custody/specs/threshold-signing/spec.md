@@ -1,11 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: Operator discovery and VRF sampling
-Before initiating a signing request, the agent SHALL read the on-chain operator registry to obtain the full list of eligible operators (registered, stake above AVS minimum). The agent SHALL compute VRF-based operator sampling using the on-chain-derived seed `keccak256(session_id || blockhash(B - 1))` where B is the block in which `initSession` was confirmed. The agent selects the K operators corresponding to the lowest hash values of `keccak256(seed || operator_id)` for each registered operator. This computation is deterministic and independently verifiable by any party with on-chain data.
+Before initiating a signing request, the agent SHALL read the on-chain operator registry to obtain the full list of eligible operators (registered, stake above AVS minimum). The agent SHALL compute VRF-based operator sampling using the on-chain-derived seed `keccak256(session_id || session.vrf_randao)` where `session.vrf_randao` is `block.prevrandao` from the `initSession` block, stored in the session record. The agent selects the K operators corresponding to the lowest hash values of `keccak256(seed || operator_id)` for each registered operator. This computation is deterministic and independently verifiable by any party with on-chain data.
 
 #### Scenario: Agent computes operator sample deterministically
-- **WHEN** the agent initiates a signing request for a session confirmed in block B
-- **THEN** it reads the operator registry, computes `seed = keccak256(session_id || blockhash(B - 1))`, ranks all eligible operators by `keccak256(seed || operator_id)`, and selects the K with the lowest values
+- **WHEN** the agent initiates a signing request
+- **THEN** it reads the operator registry, computes `seed = keccak256(session_id || session.vrf_randao)`, ranks all eligible operators by `keccak256(seed || operator_id)`, and selects the K with the lowest values
 
 #### Scenario: Operators verify their own selection
 - **WHEN** an operator receives a signing request from the agent
@@ -141,6 +141,10 @@ If fewer than K signed nonce commitments are received in Round 1 within 5 minute
 #### Scenario: Retry samples a potentially different operator set
 - **WHEN** the agent retries a signing request
 - **THEN** a new VRF sampling is computed for the new request; the resulting K-operator set may differ from the previous one
+
+#### Scenario: Nonce material is discarded when session no longer exists on-chain
+- **WHEN** an operator has generated nonce material `(d_i, e_i)` for a session_id but that session_id no longer exists on-chain (e.g., due to a block reorg that invalidated the `initSession` transaction)
+- **THEN** the operator MUST discard the nonce material immediately upon detecting the session is absent; the operator SHALL NOT use the material in any future signing request, even if a new session with similar parameters is subsequently opened
 
 ### Requirement: Per-agent signing rate limit
 To limit the damage window if the agent's control key is compromised, operators SHALL enforce a per-agent rate limit of 60 signing requests per hour per `agent_pubkey`. If this limit is exceeded, the operator SHALL reject the signing request with a rate-limit-exceeded error and emit a signed rejection receipt. The rate limit window is a rolling 60-minute window.

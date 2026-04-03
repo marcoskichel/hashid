@@ -62,7 +62,7 @@ sequenceDiagram
     OpN->>Agent: group_pubkey (confirmed)
     Note over Agent: group_pubkey verified — all N operators agree
 
-    Agent->>Agent: Build identity_record { agent_id, threshold_pubkey, control_pubkey, eigenda_record_id: null, successor: null }
+    Agent->>Agent: Build identity_record { agent_id, threshold_pubkey, control_pubkey, eigenda_record_id: null }
 
     Note over Agent,Chain: Threshold signature over stable identity core — this IS the db_commitment
     Agent->>Op1: SigningRound1(session_id, sha256(agent_id || threshold_pubkey || control_pubkey))
