@@ -1,11 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: DKG initiation
-The CLI SHALL initiate a FROST DKG ceremony by broadcasting a `DKGInit` message to all registered EigenLayer AVS operators, specifying the threshold parameters `(K, N)` and a session identifier.
+The CLI SHALL initiate a FROST DKG ceremony by broadcasting a `DKGInit` message to all registered EigenLayer AVS operators, specifying the threshold parameters `(K, N)` and a session identifier. Before broadcasting, the agent SHALL read the on-chain operator registry to obtain each operator's endpoint URL and AVS public key; the agent contacts operators directly at their registered endpoints without routing through any coordinator.
 
 #### Scenario: DKG session is created
 - **WHEN** `hashid bootstrap` is invoked
-- **THEN** a `DKGInit` message with `{ session_id, threshold: K, total: N }` is broadcast to all N operators
+- **THEN** a `DKGInit` message with `{ session_id, threshold: K, total: N }` is sent directly to each of the N operators at their registered endpoint URLs obtained from the on-chain operator registry
 
 #### Scenario: Insufficient operators available
 - **WHEN** fewer than N operators acknowledge `DKGInit` within the timeout
@@ -75,14 +75,14 @@ Each operator SHALL store its key share in secure, persistent storage, protected
 - **THEN** no share leaves the operator's secure storage
 
 ### Requirement: Epoch-based share resharing
-The system SHALL support FROST resharing (ProactiveSS) to rotate shares across operators without changing the group public key. Resharing SHALL produce a new set of N shares. Old shares SHALL be cryptographically invalidated ONLY after all N operators have submitted Phase 2 confirmations as defined in the two-phase resharing protocol in `key-succession/spec.md`. Old shares remain valid throughout Phase 1 distribution; no operator SHALL delete its old share until the coordinator signals completion.
+The system SHALL support FROST resharing (ProactiveSS) to rotate shares across operators without changing the group public key. Resharing SHALL produce a new set of N shares. Old shares SHALL be cryptographically invalidated ONLY after all N operators have submitted Phase 2 confirmations as defined in the two-phase resharing protocol in `key-succession/spec.md`. Old shares remain valid throughout Phase 1 distribution; no operator SHALL delete its old share until all N Phase 2 confirmations are received and the ceremony is complete. The agent drives resharing in the same way it drives initial DKG — contacting operators directly at their registered endpoints with no separate coordinator.
 
 #### Scenario: Resharing produces same public key
 - **WHEN** FROST resharing completes
 - **THEN** the group public key is identical before and after resharing
 
 #### Scenario: Old shares are invalid after resharing
-- **WHEN** FROST resharing completes (all N Phase 2 confirmations received and coordinator signals completion)
+- **WHEN** FROST resharing completes (all N Phase 2 confirmations are received and the ceremony is complete)
 - **THEN** a partial signature produced with an old share is rejected during aggregation
 
 ### Requirement: Operator concentration limit at DKG initiation

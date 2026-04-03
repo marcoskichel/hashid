@@ -15,11 +15,11 @@
 ## MODIFIED Requirements
 
 ### Requirement: Session initiation
-A verification session SHALL begin with the verifier selecting 5 challenge strings from the genesis corpus, computing `keccak256(challenge)` for each to form `challenge_hashes: bytes32[5]`, and calling `initSession(agent_pubkey, nonce, verifier_pubkey, challenge_hashes)` on the `SessionRegistry` contract. The verifier SHALL NOT send the raw challenge strings to the agent until the `initSession` transaction is confirmed on-chain. This ordering ensures the coordinator cannot substitute a different message after the operator has committed nonces.
+A verification session SHALL begin with the verifier selecting 5 arbitrary challenge strings of its choice (e.g. random bytes or structured nonces), computing `keccak256(challenge)` for each to form `challenge_hashes: bytes32[5]`, and calling `initSession(agent_pubkey, nonce, verifier_pubkey, challenge_hashes)` on the `SessionRegistry` contract. The challenges MUST be non-empty and unique within the session. The verifier SHALL NOT send the raw challenge strings to the agent until the `initSession` transaction is confirmed on-chain. This ordering ensures the coordinator cannot substitute a different message after the operator has committed nonces.
 
 #### Scenario: Challenges are selected and hashed before initSession
 - **WHEN** a verification session starts
-- **THEN** the verifier selects 5 challenges, computes their keccak256 hashes, and submits those hashes in `initSession` before sending any raw challenge data to the agent
+- **THEN** the verifier selects 5 verifier-chosen challenge strings, computes their keccak256 hashes, and submits those hashes in `initSession` before sending any raw challenge data to the agent
 
 #### Scenario: Session is registered on-chain before challenges are sent
 - **WHEN** `initSession` is confirmed on-chain
@@ -27,7 +27,7 @@ A verification session SHALL begin with the verifier selecting 5 challenge strin
 
 #### Scenario: Correct number of challenges issued
 - **WHEN** a session is initiated
-- **THEN** exactly 5 challenge strings from the genesis corpus are sent to the agent, matching the 5 hashes committed in `initSession`
+- **THEN** exactly 5 challenge strings are sent to the agent, matching the 5 hashes committed in `initSession`
 
 ### Requirement: Agent response
 The agent SHALL respond to each challenge by coordinating a threshold signing ceremony and returning the assembled Ed25519 signature over the challenge data.

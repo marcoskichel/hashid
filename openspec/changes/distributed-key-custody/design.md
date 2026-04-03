@@ -130,11 +130,11 @@ Current state: `packages/hashid-cli` exists as a Python package containing ML tr
 
 **Why:** Direct succession submission exposes `new_pubkey` in the mempool. An attacker with K shares can observe the mempool, extract `new_pubkey`, and race to file a fraudulent succession entry. Commit-reveal severs this: the commit phase stores only `keccak256(agent_id || old_pubkey || new_pubkey || salt)` — the pubkey is not extractable without the salt. The 24-hour delay is the detection window for T-018 (succession chain injection), not a frontrunning countermeasure (commit-reveal already eliminates frontrunning). Only the committing address can reveal, preventing any third party from completing a commitment they observed.
 
-### Decision 11: Coordinator accountability via append-only nonce log
+### Decision 11: Operator accountability via signed nonce commitments
 
-**Choice:** The AVS Coordinator maintains an append-only nonce commitment log. After each signing round, it publishes a Merkle root of the log to `SessionRegistry` on-chain. Nonce reuse is slashable via a `slashNonceReuse` function that accepts Merkle inclusion proofs — no Ed25519 arithmetic required on-chain.
+**Choice:** Operators sign their nonce commitments with their AVS Ed25519 key and send them directly to the agent. The agent archives signed commitment sets to EigenDA. Nonce reuse is proved on-chain by submitting two signed commitments with identical `(D_i, E_i)` to `slashNonceReuse` — no Merkle proofs or per-session on-chain writes required.
 
-**Why:** The coordinator is the single most dangerous internal component — it sees every partial signature and routes every signing request. Without accountability, a coordinator compromise is undetectable after the fact. The nonce log makes it impossible to deny what was routed and when; the on-chain Merkle root makes the log tamper-evident without requiring on-chain storage of every entry. The slashing proof requires only keccak256 verification: two log entries from the same operator with identical `(D_i, E_i)` across different sessions is conclusive, verifiable evidence of nonce reuse regardless of whether the key share was actually recovered.
+**Why:** The coordinator-centric Merkle root publication model required on-chain writes after every signing round and complex inclusion-proof flows for operators. The new model only touches the chain when fraud actually occurs (lazy). Operators are accountable for their own commitments directly — no trusted intermediate party needed. Two valid operator-signed commitments with the same nonce are conclusive, self-contained evidence regardless of any log.
 
 ### Decision 12: Agent control key as mandatory signing gate
 
@@ -153,6 +153,20 @@ Neither factor alone is sufficient. Stealing the control key gives the ability t
 - Agent must be online for every signing request to produce auth tokens (acceptable — the agent is the signing coordinator and is online by design).
 - Control key is a single-party key on the agent machine. If compromised it does not enable forgery alone, but does allow an attacker to initiate signing requests contingent on operator cooperation.
 - Control key rotation is bundled with group key succession — both rotate atomically in the same commit-reveal ceremony.
+
+### Decision 13: Coordinatorless, agent-driven signing
+
+**Choice:** Remove the AVS Coordinator as a separate infrastructure component. The agent drives the full signing flow: it reads operator endpoints from an on-chain registry, computes VRF sampling deterministically from on-chain data (`keccak256(session_id || blockhash(B-1))`), contacts operators directly for both DKG and threshold signing, and performs FROST aggregation itself.
+
+**Alternatives considered:**
+- *Keep coordinator as a convenience layer*: Reduces agent complexity but reintroduces T-038 (coordinator SPOF affecting all agents simultaneously), coordinator trust assumptions, coordinator bond/slashing complexity, and a coordinator-specific attack surface.
+
+**Why coordinatorless:** The coordinator was doing nothing that the agent cannot do with public on-chain data and direct operator communication. Removing it eliminates the single point of failure that affected all agents simultaneously, removes an entire trust assumption from the protocol, and simplifies accountability (operators sign their own evidence rather than relying on a coordinator to publish it).
+
+**Trade-offs:**
+- Agent must manage direct operator communication (more complex client)
+- Operators need publicly accessible endpoints (solved by on-chain registry)
+- No coordinator anonymization layer between agent IP and operators (acceptable — the agent is authorizing signing and its participation is not secret)
 
 ## Open Questions
 

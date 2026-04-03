@@ -1,153 +1,126 @@
 ## ADDED Requirements
 
-### Requirement: Signing request initiation
-The agent SHALL submit a signing request by sending the message to be signed and a valid on-chain session ID to the AVS coordinator endpoint. The coordinator SHALL select K operators via VRF sampling and forward the request.
+### Requirement: Operator discovery and VRF sampling
+Before initiating a signing request, the agent SHALL read the on-chain operator registry to obtain the full list of eligible operators (registered, stake above AVS minimum). The agent SHALL compute VRF-based operator sampling using the on-chain-derived seed `keccak256(session_id || blockhash(B - 1))` where B is the block in which `initSession` was confirmed. The agent selects the K operators corresponding to the lowest hash values of `keccak256(seed || operator_id)` for each registered operator. This computation is deterministic and independently verifiable by any party with on-chain data.
 
-#### Scenario: Signing request is submitted
-- **WHEN** the agent calls the signing endpoint with `{ message, session_id }`
-- **THEN** the coordinator verifies the session exists on-chain, selects K operators via VRF, and forwards the request to those K operators
+#### Scenario: Agent computes operator sample deterministically
+- **WHEN** the agent initiates a signing request for a session confirmed in block B
+- **THEN** it reads the operator registry, computes `seed = keccak256(session_id || blockhash(B - 1))`, ranks all eligible operators by `keccak256(seed || operator_id)`, and selects the K with the lowest values
 
-#### Scenario: Invalid session is rejected
-- **WHEN** the agent submits a session ID that does not exist on-chain or is already spent
-- **THEN** the coordinator rejects the request with a session-not-found or session-spent error before contacting any operator
+#### Scenario: Operators verify their own selection
+- **WHEN** an operator receives a signing request from the agent
+- **THEN** it independently computes the VRF ranking from on-chain data and verifies it is in the selected K before proceeding; if it is not in the selected set, it rejects the request
 
-### Requirement: Round 1 pre-check — challenge commitment verification
-Before generating any nonce material, an operator SHALL verify that the signing request's challenge is committed in the on-chain session record. This check MUST precede nonce generation so that no nonce material is produced for an uncommitted challenge.
+#### Scenario: Under-staked operators are excluded from sampling
+- **WHEN** the agent computes the VRF ranking
+- **THEN** operators whose current staked balance is below the AVS minimum are excluded from the candidate pool before sampling
 
-The operator verifies both conditions:
-1. `keccak256(raw_challenge) ∈ session.challenge_hashes` (challenge is in the committed set)
-2. `sha256(raw_challenge || session_id) == message` (coordinator formed the message correctly)
+### Requirement: Round 1 — pre-check and nonce generation
+Before generating any nonce material, an operator SHALL verify:
+1. The session exists on-chain with `status: OPEN`
+2. The auth token is valid: `ed25519.verify(auth_token, session_id || message_hash || token_nonce, control_pubkey)` where `control_pubkey` is read from the on-chain `AnchorIdentity` record
+3. The `token_nonce` has not been seen in a prior request within this session
+4. `keccak256(raw_challenge)` is in `session.challenge_hashes`
+5. `sha256(raw_challenge || session_id) == message`
+6. The operator's own staked balance meets the AVS minimum
 
-If either check fails, the operator SHALL reject the request and emit a signed rejection receipt `{ session_id, message_hash, challenge_hash, round: "1", timestamp }` to the coordinator log.
+If any check fails, the operator SHALL reject the request, emit a signed rejection receipt to the agent, and generate no nonce material.
 
-#### Scenario: Challenge is committed — operator proceeds
-- **WHEN** `keccak256(raw_challenge)` is present in `session.challenge_hashes` and the message is correctly formed
-- **THEN** the operator proceeds to nonce generation
-
-#### Scenario: Challenge not in committed set — operator rejects
-- **WHEN** `keccak256(raw_challenge)` is not present in `session.challenge_hashes`
-- **THEN** the operator rejects the request, emits a rejection receipt, and generates no nonce material
-
-#### Scenario: Malformed message — operator rejects
-- **WHEN** `sha256(raw_challenge || session_id) ≠ message`
-- **THEN** the operator rejects the request and generates no nonce material
-
-### Requirement: Per-request nonce generation
-Each participating operator SHALL derive nonces using the RFC 9591 hybrid scheme. Nonces SHALL NOT be reused across requests. The nonce scalars SHALL be zeroed from memory immediately after the partial signature is computed.
+If all checks pass, the operator SHALL derive nonces using the RFC 9591 hybrid scheme and send a signed nonce commitment directly to the agent.
 
 Nonce derivation:
 ```
 nonce_material = HKDF-SHA-512(
     IKM  = secret_share_bytes,
-    salt = crypto.getRandomValues(new Uint8Array(32)),  // fresh per request
+    salt = crypto.getRandomValues(new Uint8Array(32)),
     info = "FROST-ED25519-SHA512-v1" || session_id || message_hash
 )
 (d_i, e_i) = reduce_mod_q(nonce_material[0:32], nonce_material[32:64])
 ```
 
-The `session_id` in the `info` field ensures that VM snapshot/restore scenarios produce detectable (identical commitment, different session) reuse rather than silent reuse.
+#### Scenario: All pre-checks pass — signed commitment sent to agent
+- **WHEN** an operator validates all six pre-checks successfully
+- **THEN** it generates `(d_i, e_i)` via the hybrid HKDF scheme and sends `{ D_i: d_i·G, E_i: e_i·G, signature: sign({ session_id, round_index, D_i, E_i, timestamp }, avs_key) }` directly to the agent
 
-#### Scenario: Nonces are derived per request
-- **WHEN** an operator proceeds to Round 1 after the pre-check passes
-- **THEN** it derives `(d_i, e_i)` using the hybrid HKDF scheme with a fresh random salt
+#### Scenario: Failed auth token — rejection receipt sent
+- **WHEN** `ed25519.verify(auth_token, session_id || message_hash || token_nonce, control_pubkey)` returns false
+- **THEN** the operator sends a signed rejection receipt to the agent with reason `"invalid-auth-token"` and generates no nonce material
+
+#### Scenario: Replayed token nonce — rejection receipt sent
+- **WHEN** the `token_nonce` was already seen in a prior request within this session
+- **THEN** the operator sends a signed rejection receipt with reason `"replayed-token-nonce"` and generates no nonce material
+
+#### Scenario: Challenge not committed — rejection receipt sent
+- **WHEN** `keccak256(raw_challenge)` is not in `session.challenge_hashes`
+- **THEN** the operator sends a signed rejection receipt with reason `"challenge-not-committed"` and generates no nonce material
 
 #### Scenario: Nonce scalars are zeroed after signing
-- **WHEN** the partial signature `z_i` is computed
+- **WHEN** the partial signature is computed in Round 2
 - **THEN** the nonce scalar bytes `d_i` and `e_i` are overwritten with zeros before any other operation
 
-#### Scenario: Nonce reuse is detectable and slashable
-- **WHEN** an operator's nonce commitments `(D_i, E_i)` appear identically in the coordinator's log for two different sessions
-- **THEN** a `slashNonceReuse` proof can be submitted on-chain to slash the operator
+### Requirement: Round 1 — agent collects and aggregates nonce commitments
+The agent SHALL collect signed nonce commitments from all K sampled operators. After receiving K valid signed commitments, the agent SHALL compute the aggregated nonce commitment per the FROST protocol and broadcast it back to all K operators to initiate Round 2.
 
-### Requirement: Operator stake verification at signing time
-Before generating nonce material for any signing request, an operator SHALL verify (via on-chain read) that its current staked balance meets the AVS minimum stake threshold. If the operator's stake has fallen below the minimum since DKG participation, the operator SHALL reject the signing request with a stake-below-minimum error and SHALL NOT produce nonce material or a partial signature. The coordinator SHALL exclude operators below the minimum stake threshold from VRF sampling before routing signing requests.
+#### Scenario: Agent waits for K valid commitments
+- **WHEN** the agent has received fewer than K signed nonce commitments
+- **THEN** it continues waiting; the timeout is 5 minutes from the signing request initiation
 
-#### Scenario: Operator with sufficient stake proceeds normally
-- **WHEN** an operator's current staked balance meets or exceeds the AVS minimum
-- **THEN** it proceeds with signing request processing normally
+#### Scenario: Agent broadcasts aggregated nonce to start Round 2
+- **WHEN** K valid signed nonce commitments are received
+- **THEN** the agent computes the aggregated nonce commitment and sends it to all K operators simultaneously
 
-#### Scenario: Under-staked operator rejects signing request
-- **WHEN** an operator's current staked balance has fallen below the AVS minimum
-- **THEN** it rejects the signing request with a stake-below-minimum error and generates no nonce material
+#### Scenario: Operator with invalid signature is excluded
+- **WHEN** a nonce commitment arrives with a signature that does not verify under the sender's registered AVS key
+- **THEN** the agent discards the commitment; if fewer than K valid commitments arrive within the timeout, the round expires
 
-#### Scenario: Coordinator excludes under-staked operators from VRF sampling
-- **WHEN** the coordinator performs VRF operator sampling for a session
-- **THEN** operators below the minimum stake threshold are excluded from the candidate pool before sampling occurs
+### Requirement: Round 2 — partial signature computation and delivery
+Upon receiving the aggregated nonce commitment from the agent, each of the K operators SHALL compute its partial signature using the FROST protocol and its key share, then send the partial signature directly to the agent. The partial signature SHALL be a scalar `z_i = d_i + e_i·ρ_i + λ_i·s_i·c` where the binding factor `ρ_i`, Lagrange coefficient `λ_i`, and challenge `c` are computed per RFC 9591.
 
-### Requirement: Agent authorization token verification
-Every signing request SHALL include an agent authorization token `auth_token = sign(session_id || message_hash || token_nonce, control_privkey)` where `token_nonce` is a fresh 32-byte random value generated by the agent per request. Before generating any nonce material, an operator SHALL verify the token: `ed25519.verify(auth_token, session_id || message_hash || token_nonce, control_pubkey)` where `control_pubkey` is read from the on-chain `AnchorIdentity` record for the agent. The operator SHALL record the `token_nonce` and reject any subsequent request reusing the same `token_nonce` within the same session. If the token is absent, fails verification, or reuses a nonce, the operator SHALL reject the request without generating nonce material and SHALL emit a signed rejection receipt.
+#### Scenario: Partial signature is sent directly to agent
+- **WHEN** an operator receives the Round 2 aggregated nonce commitment from the agent
+- **THEN** it computes `z_i` per RFC 9591 and sends `{ operator_id, partial_sig: z_i }` directly to the agent
 
-#### Scenario: Valid auth token allows signing to proceed
-- **WHEN** an operator receives a signing request with a valid auth token containing a fresh `token_nonce`
-- **THEN** it proceeds to the Round 1 pre-check (challenge commitment verification)
+#### Scenario: Operator session re-verification before Round 2
+- **WHEN** an operator receives the Round 2 message from the agent
+- **THEN** it re-verifies that the session is still `status: OPEN` on-chain before computing the partial signature
 
-#### Scenario: Missing auth token is rejected
-- **WHEN** an operator receives a signing request with no auth token
-- **THEN** the operator rejects the request, emits a rejection receipt, and generates no nonce material
+### Requirement: Agent FROST aggregation
+After collecting K partial signatures, the agent SHALL aggregate them into a single Ed25519 signature using the FROST aggregation algorithm: `z = Σ z_i mod q`. The agent SHALL verify the assembled signature against the group public key before accepting it: `ed25519.verify(sig, message, group_pubkey)`. If verification fails, the agent discards the assembled signature and may retry the entire signing request.
 
-#### Scenario: Invalid auth token is rejected
-- **WHEN** `ed25519.verify(auth_token, session_id || message_hash || token_nonce, control_pubkey)` returns false
-- **THEN** the operator rejects the request, emits a rejection receipt, and generates no nonce material
+#### Scenario: Agent aggregates K partial signatures
+- **WHEN** the agent has received K valid partial signatures
+- **THEN** it computes `z = Σ z_i mod q` and forms the Ed25519 signature `(R, z)` where `R` is the aggregated nonce point
 
-#### Scenario: Replayed auth token nonce is rejected
-- **WHEN** an operator receives a signing request whose `token_nonce` was already seen in a prior request within the same session
-- **THEN** the operator rejects the request, emits a rejection receipt, and generates no nonce material
+#### Scenario: Assembled signature is verified by agent before use
+- **WHEN** the agent completes aggregation
+- **THEN** it runs `ed25519.verify(sig, message, group_pubkey)` and only accepts the signature if verification passes
 
-### Requirement: Partial signature computation
-Each of the K sampled operators SHALL compute a partial signature over the message using its key share and the session nonces, then return the partial signature to the coordinator.
-
-#### Scenario: Partial signature is returned
-- **WHEN** an operator receives a valid signing request with a known session ID
-- **THEN** it computes a partial signature and returns `{ operator_id, partial_sig }` to the coordinator
-
-#### Scenario: Operator policy check
-- **WHEN** an operator receives a signing request
-- **THEN** it verifies the session exists on-chain and the requesting agent pubkey matches the session registration before signing
-
-### Requirement: Signature aggregation
-The coordinator SHALL aggregate K or more partial signatures into a single valid Ed25519 signature using the FROST aggregation algorithm.
-
-#### Scenario: Aggregation succeeds with exactly K partial signatures
-- **WHEN** exactly K valid partial signatures are received
-- **THEN** the coordinator combines them into a single Ed25519 signature that verifies against the group public key
-
-#### Scenario: Partial signature from non-sampled operator is rejected
-- **WHEN** a partial signature arrives from an operator not in the VRF-sampled set for this session
-- **THEN** the coordinator discards it and does not include it in aggregation
+#### Scenario: Verification failure triggers retry
+- **WHEN** the assembled signature fails Ed25519 verification
+- **THEN** the agent discards the signature, logs the failure, and may initiate a new signing request with a fresh VRF sample
 
 ### Requirement: Liveness and retry
-If fewer than K partial signatures are received within 5 minutes, the signing request SHALL expire. The agent SHALL be able to retry with a new signing request, which will sample a fresh set of K operators.
+If fewer than K signed nonce commitments are received in Round 1 within 5 minutes, or fewer than K partial signatures are received in Round 2 within 5 minutes of the Round 2 broadcast, the signing request SHALL expire. The on-chain session remains OPEN and unspent. The agent MAY retry by initiating a new signing request with a fresh VRF sample.
 
-#### Scenario: Request expires after timeout
-- **WHEN** fewer than K partial signatures are received within 5 minutes
-- **THEN** the signing request is marked expired; the on-chain session remains unspent; the agent may retry
+#### Scenario: Round 1 timeout expires the request
+- **WHEN** fewer than K valid signed nonce commitments arrive within 5 minutes of the signing request initiation
+- **THEN** the signing request is abandoned; the agent may retry with a new VRF sample
 
-#### Scenario: Retry samples different operators
-- **WHEN** the agent retries a signing request after expiry
-- **THEN** a new VRF sampling is performed; the new K-operator set may differ from the previous one
+#### Scenario: Round 2 timeout expires the request
+- **WHEN** fewer than K partial signatures arrive within 5 minutes of the Round 2 broadcast
+- **THEN** the signing request is abandoned; the agent may retry with a new VRF sample
+
+#### Scenario: Retry samples a potentially different operator set
+- **WHEN** the agent retries a signing request
+- **THEN** a new VRF sampling is computed for the new request; the resulting K-operator set may differ from the previous one
 
 ### Requirement: Per-agent signing rate limit
-To limit the damage window if the agent's control key is compromised, operators and the coordinator SHALL enforce a per-agent rate limit of 60 signing requests per hour per `agent_pubkey`. If this limit is exceeded, operators SHALL reject the signing request with a rate-limit-exceeded error and emit a rejection receipt. The coordinator SHALL also enforce this limit before routing requests to operators. The rate limit window is a rolling 60-minute window counted from the first request.
+To limit the damage window if the agent's control key is compromised, operators SHALL enforce a per-agent rate limit of 60 signing requests per hour per `agent_pubkey`. If this limit is exceeded, the operator SHALL reject the signing request with a rate-limit-exceeded error and emit a signed rejection receipt. The rate limit window is a rolling 60-minute window.
 
-#### Scenario: Rate limit not exceeded — signing proceeds normally
-- **WHEN** an agent has submitted fewer than 60 signing requests in the past 60 minutes
+#### Scenario: Rate limit not exceeded — signing proceeds
+- **WHEN** an agent has submitted fewer than 60 signing requests to an operator in the past 60 minutes
 - **THEN** the operator processes the request normally
 
 #### Scenario: Rate limit exceeded — operator rejects
-- **WHEN** an operator has seen 60 or more valid signing requests for the same `agent_pubkey` in the past 60 minutes
-- **THEN** the operator rejects the request with a rate-limit-exceeded error and emits a rejection receipt; no nonce material is generated
-
-#### Scenario: Coordinator enforces rate limit before routing
-- **WHEN** the coordinator receives a signing request and the agent has already reached the rate limit
-- **THEN** the coordinator returns a rate-limit-exceeded error to the agent without forwarding to any operator
-
-### Requirement: Final signature delivery
-The coordinator SHALL return the assembled Ed25519 signature to the agent. The agent SHALL verify the signature against the group public key before accepting it.
-
-#### Scenario: Signature is verified by agent
-- **WHEN** the coordinator returns a signature
-- **THEN** the agent verifies `ed25519.verify(signature, message, group_pubkey)` before using the signature
-
-#### Scenario: Invalid assembled signature is rejected
-- **WHEN** the assembled signature fails Ed25519 verification
-- **THEN** the agent discards it and may retry
+- **WHEN** an operator has received 60 or more valid signing requests from the same `agent_pubkey` in the past 60 minutes
+- **THEN** the operator rejects the request with a rate-limit-exceeded error, emits a signed rejection receipt, and generates no nonce material

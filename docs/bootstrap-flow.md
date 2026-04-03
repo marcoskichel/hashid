@@ -6,7 +6,6 @@ The bootstrap ceremony is the one-time process that establishes an agent's persi
 sequenceDiagram
     autonumber
     participant Agent as Agent (hashid-cli)
-    participant Coord as AVS Coordinator
     participant Op1 as AVS Operator 1
     participant OpN as AVS Operator N
     participant EigenDA as EigenDA
@@ -17,9 +16,8 @@ sequenceDiagram
     Agent->>Agent: Generate control key pair (Ed25519, agent machine only)
     Note over Agent: control_privkey stays local — never transmitted
 
-    Agent->>Coord: DKGInit(session_id, K, N)
-    Coord->>Op1: DKGInit(session_id, K, N)
-    Coord->>OpN: DKGInit(session_id, K, N)
+    Agent->>Op1: DKGInit(session_id, K, N)
+    Agent->>OpN: DKGInit(session_id, K, N)
 
     Note over Op1,OpN: Round 1 — Commitment + Proof of Knowledge Broadcast
     Op1->>Op1: Generate secret polynomial f1(x) of degree K-1
@@ -30,17 +28,16 @@ sequenceDiagram
     OpN->>OpN: Compute Feldman VSS commitments CN[0..K-1]
     OpN->>OpN: Sample nonce k from CSPRNG
     OpN->>OpN: Compute RN = k·G, cN = HDKG(N || CN[0] || RN), muN = k + aN0·cN mod q
-    Op1->>Coord: Broadcast VSS commitments (C1, sigma1)
-    OpN->>Coord: Broadcast VSS commitments (CN, sigmaN)
-    Coord->>Op1: Relay all peer commitments
-    Coord->>OpN: Relay all peer commitments
+    Op1->>Agent: Broadcast VSS commitments (C1, sigma1)
+    OpN->>Agent: Broadcast VSS commitments (CN, sigmaN)
+    Agent->>Op1: Relay all peer commitments
+    Agent->>OpN: Relay all peer commitments
 
     Note over Op1,OpN: PoK Verification — must pass before Round 2
     Op1->>Op1: For each peer l: verify Rl == mul·G - cl·Cl[0]
     OpN->>OpN: For each peer l: verify Rl == mul·G - cl·Cl[0]
     alt Any PoK fails
-        Op1->>Coord: Complaint(invalid_pok, culprit=l)
-        Coord->>Agent: DKGAbort(session_id, reason)
+        Op1->>Agent: Complaint(invalid_pok, culprit=l)
         Note over Agent: Ceremony aborted — no Round 2 shares sent
     end
 
@@ -51,8 +48,7 @@ sequenceDiagram
     OpN->>OpN: Decrypt received shares; verify against commitments
 
     alt VSS verification fails
-        Op1->>Coord: Complaint(invalid_share, from=j)
-        Coord->>Agent: DKGAbort(session_id, reason)
+        Op1->>Agent: Complaint(invalid_share, from=j)
         Note over Agent: Ceremony aborted — restart with new session_id
     end
 
@@ -60,23 +56,20 @@ sequenceDiagram
     Op1->>Op1: group_pubkey = sum(Ci[0] for all i)
     OpN->>OpN: group_pubkey = sum(Ci[0] for all i)
 
-    Agent->>Coord: RequestGroupPubkey(session_id)
-    Coord->>Op1: ConfirmGroupPubkey(session_id)?
-    Coord->>OpN: ConfirmGroupPubkey(session_id)?
-    Op1->>Coord: group_pubkey (confirmed)
-    OpN->>Coord: group_pubkey (confirmed)
-    Coord->>Agent: group_pubkey (all N operators agree)
+    Agent->>Op1: ConfirmGroupPubkey(session_id)?
+    Agent->>OpN: ConfirmGroupPubkey(session_id)?
+    Op1->>Agent: group_pubkey (confirmed)
+    OpN->>Agent: group_pubkey (confirmed)
+    Note over Agent: group_pubkey verified — all N operators agree
 
     Agent->>Agent: Build identity_record { agent_id, threshold_pubkey, control_pubkey, eigenda_record_id: null, successor: null }
 
     Note over Agent,Chain: Threshold signature over stable identity core — this IS the db_commitment
-    Agent->>Coord: RequestSignature(sha256(agent_id || threshold_pubkey || control_pubkey), session_id)
-    Coord->>Op1: SigningRound1(session_id)
-    Coord->>OpN: SigningRound1(session_id)
-    Op1->>Coord: PartialSignature
-    OpN->>Coord: PartialSignature
-    Coord->>Coord: FROST aggregation
-    Coord->>Agent: Assembled Ed25519 signature (= db_commitment)
+    Agent->>Op1: SigningRound1(session_id, sha256(agent_id || threshold_pubkey || control_pubkey))
+    Agent->>OpN: SigningRound1(session_id, sha256(agent_id || threshold_pubkey || control_pubkey))
+    Op1->>Agent: PartialSignature
+    OpN->>Agent: PartialSignature
+    Agent->>Agent: FROST aggregation → Assembled Ed25519 signature (= db_commitment)
 
     Agent->>EigenDA: Write(identity_record, db_commitment)
     EigenDA->>Agent: eigenda_record_id
@@ -100,7 +93,7 @@ sequenceDiagram
 
 **PoK prevents rogue key attack.** Each operator broadcasts a Schnorr proof-of-knowledge over their constant-term commitment before Round 2. Without this, a malicious operator could choose their commitment to bias the group public key to one they control. PoK verification is a hard gate — no Round 2 shares are sent until all N-1 proofs pass.
 
-**Coordinator as router, not trust anchor.** The coordinator does not participate in key material handling. It relays commitments and collects confirmations, but all cryptographic verification happens on the operators. A compromised coordinator can stall the ceremony but cannot forge keys or shares.
+**Agent as router, not trust anchor.** The agent relays DKG messages between operators but does not participate in key material handling. All cryptographic verification happens on the operators. A compromised or misbehaving agent machine can stall the ceremony but cannot forge keys or shares.
 
 **`db_commitment` is a threshold signature, not a hash.** The commitment is a FROST Ed25519 threshold signature over `sha256(agent_id || threshold_pubkey || control_pubkey)`. This proves the key holder endorsed the record — a plain hash would only prove data integrity. The three hash inputs are the stable identity core: `eigenda_record_id` is excluded (it is only known after the EigenDA write, and including it would be circular) and `successor` is excluded (it is legitimately mutable post-bootstrap). The identity record is written to EigenDA first so that `eigenda_record_id` is available at the time `AnchorIdentity` is called.
 
