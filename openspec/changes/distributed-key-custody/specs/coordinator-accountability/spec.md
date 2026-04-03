@@ -15,6 +15,19 @@ Each AVS operator SHALL register on-chain with their EigenLayer signing address,
 - **WHEN** an operator's staked balance falls below the AVS minimum
 - **THEN** the agent excludes that operator from VRF sampling; the operator is skipped as if absent from the registry
 
+### Requirement: Connection-level rate limiting by agent identity
+Operators SHALL enforce a per-`agent_pubkey` connection-level rate limit before performing any cryptographic verification (auth token check, on-chain reads). Requests that arrive from any source claiming an `agent_pubkey` that has exceeded the connection limit SHALL be rejected immediately with an HTTP 429 response, without reading on-chain state or running Ed25519 verification. The connection-level limit SHALL be at least as strict as the per-agent signing rate limit (60 requests per hour).
+
+Operators SHOULD also apply IP-based rate limiting as a first line of defence against anonymous flood traffic. IP-based limits are infrastructure-level and not specified by this protocol.
+
+#### Scenario: Connection limit blocks flood before cryptographic work
+- **WHEN** an agent_pubkey has exceeded the connection-level rate limit
+- **THEN** the operator returns HTTP 429 without performing auth token verification, on-chain session lookup, or any other protocol work
+
+#### Scenario: Unknown agent_pubkey is not pre-blocked
+- **WHEN** an operator receives a request for an agent_pubkey it has not seen before
+- **THEN** it proceeds to cryptographic verification normally; the connection counter for that agent_pubkey starts at 1
+
 ### Requirement: Operator-signed nonce commitments
 Before sending Round 1 nonce commitments to the agent, each operator SHALL sign the commitment with its registered AVS Ed25519 key: `sign({ session_id, round_index, D_i, E_i, timestamp }, operator_avs_key)`. The signed commitment SHALL accompany the raw `(D_i, E_i)` values in the Round 1 response. The signature creates a non-repudiable record binding the operator to a specific nonce for a specific session and round.
 

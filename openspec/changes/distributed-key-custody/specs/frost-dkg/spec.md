@@ -85,6 +85,27 @@ The system SHALL support FROST resharing (ProactiveSS) to rotate shares across o
 - **WHEN** FROST resharing completes (all N Phase 2 confirmations are received and the ceremony is complete)
 - **THEN** a partial signature produced with an old share is rejected during aggregation
 
+### Requirement: Resharing authorization — K-of-N endorsement of new operator set
+Before a resharing ceremony may begin, the proposed new operator set MUST be endorsed by the current K-of-N operators via a FROST threshold signature. The endorsement payload is `sha256(agent_id || keccak256(sorted new_operator_addresses) || new_K || new_N || timestamp)`. The agent collects endorsement partial signatures from the current K-of-N operators and submits the assembled threshold signature on-chain via `authorizeResharing(agent_id, new_operator_set, new_K, new_N, timestamp, threshold_signature)`. The AVS contract verifies the threshold signature against the agent's current registered `group_pubkey` and records the authorization. `DKGInit` for resharing SHALL revert if no valid on-chain resharing authorization exists for the proposed operator set.
+
+This requirement closes T-039: a compromised agent machine can propose an attacker-controlled operator set, but cannot compel the current independent staked operators to endorse it. The threshold signature is the proof that the current legitimate operator set approved the transition.
+
+#### Scenario: Resharing proceeds only with on-chain authorization
+- **WHEN** `DKGInit` is called for a resharing ceremony
+- **THEN** the AVS contract verifies a valid `authorizeResharing` record exists for the exact `(agent_id, new_operator_set, new_K, new_N)` tuple before accepting the call; if no authorization exists the call reverts
+
+#### Scenario: Current operators refuse a malicious proposed set
+- **WHEN** an agent (possibly compromised) requests endorsement partial signatures for a new operator set controlled by an attacker
+- **THEN** independent staked operators decline to contribute partial signatures; the agent cannot assemble a valid threshold endorsement; `authorizeResharing` cannot be submitted and resharing cannot begin
+
+#### Scenario: Authorization is single-use
+- **WHEN** `authorizeResharing` is consumed by a `DKGInit` call
+- **THEN** the authorization record is marked used and cannot be replayed for a second resharing ceremony; a new authorization must be obtained for any subsequent resharing
+
+#### Scenario: Expired authorization is rejected
+- **WHEN** `authorizeResharing` is submitted with a `timestamp` more than 1 hour old
+- **THEN** the contract reverts with an authorization-expired error; the agent must obtain a fresh endorsement
+
 ### Requirement: Operator concentration limit at DKG initiation
 Before a DKG ceremony begins, the AVS contract SHALL verify that no single Ethereum address controls more than `floor((K-1)/N)` of the total operator seats, where K is the signing threshold and N is the total operator count. `DKGInit` SHALL revert if any address exceeds this limit. An address "controls" an operator seat if it is the operator's registered withdrawal address, signing key, or a known delegation relationship recorded in the AVS contract.
 
