@@ -18,7 +18,7 @@ Before initiating a signing request, the agent SHALL read the on-chain operator 
 ### Requirement: Round 1 — pre-check and nonce generation
 Before generating any nonce material, an operator SHALL verify:
 1. The session exists on-chain with `status: OPEN`
-2. The auth token is valid: `ed25519.verify(auth_token, session_id || message_hash || token_nonce, control_pubkey)` where `control_pubkey` is read from the on-chain `AnchorIdentity` record
+2. The auth token is valid: `ed25519.verify(auth_token, session_id || message_hash || token_nonce, control_pubkey)` where `control_pubkey` is read from the session record (snapshotted from AnchorIdentity at `initSession` time)
 3. The `token_nonce` has not been seen in a prior request within this session
 4. `keccak256(raw_challenge)` is in `session.challenge_hashes`
 5. `sha256(raw_challenge || session_id) == message`

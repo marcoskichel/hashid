@@ -69,11 +69,19 @@ The AVS contract SHALL expose a `slashNonConfirmation(operator_id, epoch, signed
 - **THEN** the contract reverts with a confirmation-exists error
 
 ### Requirement: Full keypair succession — commit phase
-When a full keypair rotation is needed, the initiating party SHALL submit a commitment `keccak256(agent_id || old_pubkey || new_pubkey || salt)` to the `SuccessionRegistry` contract. The contract SHALL record the commitment and the committing address. The `new_pubkey` is not revealed on-chain during this phase. A commitment expires automatically after 48 hours if not revealed. After expiry, a new commitment may be submitted (subject to the 1-hour minimum between commits).
+When a full keypair rotation is needed, the initiating party SHALL submit a commitment `keccak256(agent_id || old_pubkey || new_pubkey || salt)` to the `SuccessionRegistry` contract. The contract SHALL record the commitment and the committing address. The `new_pubkey` is not revealed on-chain during this phase. A commitment expires automatically after 48 hours if not revealed. After expiry, a new commitment may be submitted (subject to the 1-hour minimum between commits). Only the agent's registered control key address or the registered guardian address MAY call `commitSuccession`. Any call from a different address SHALL revert with an unauthorized error.
 
 #### Scenario: Commitment is recorded
 - **WHEN** `commitSuccession(commitment)` is called by the agent or its delegate
 - **THEN** the contract stores `{ committing_address, commitment, committed_at }` and emits a `SuccessionCommitted` event
+
+#### Scenario: Third-party commit attempt is rejected
+- **WHEN** `commitSuccession` is called from an address that is neither the agent's registered control key address nor the registered guardian address
+- **THEN** the contract reverts with an unauthorized error before recording any commitment
+
+#### Scenario: Guardian may submit a commitment on the agent's behalf
+- **WHEN** the registered guardian calls `commitSuccession` on behalf of an agent
+- **THEN** the contract accepts the call and records the commitment with `committing_address` set to the guardian's address; the 24-hour reveal window and rate limiting apply identically
 
 #### Scenario: Only the committing address can reveal
 - **WHEN** `revealSuccession` is called from an address other than the one that committed

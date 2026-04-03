@@ -12,11 +12,15 @@ A verifier SHALL register on-chain by staking a minimum bond before it is permit
 - **THEN** the contract reverts with an unauthorized error
 
 ### Requirement: Session creation
-A registered verifier SHALL create a session by calling `initSession(agent_pubkey, nonce, verifier_pubkey, challenge_hashes)` on the `SessionRegistry` contract, where `challenge_hashes` is a `bytes32[5]` array of `keccak256` hashes of the five challenges the verifier intends to issue. The contract SHALL record `{ session_id, agent_pubkey, nonce, verifier_pubkey, challenge_hashes, status: OPEN, created_at }`. The contract SHALL derive `session_id` as `keccak256(verifier_pubkey || agent_pubkey || nonce || blockhash(block.number - 1))`, where `block.number - 1` is the block immediately preceding the transaction's inclusion block. Using `blockhash(block.number)` is invalid in Solidity — it always returns zero within the same transaction; the valid range is `[block.number - 256, block.number - 1]`.
+A registered verifier SHALL create a session by calling `initSession(agent_pubkey, nonce, verifier_pubkey, challenge_hashes)` on the `SessionRegistry` contract, where `challenge_hashes` is a `bytes32[5]` array of `keccak256` hashes of the five challenges the verifier intends to issue. The contract SHALL record `{ session_id, agent_pubkey, nonce, verifier_pubkey, challenge_hashes, control_pubkey, status: OPEN, created_at }`, where `control_pubkey` is read from the AnchorIdentity record for `agent_pubkey` at the time `initSession` is called. The contract SHALL derive `session_id` as `keccak256(verifier_pubkey || agent_pubkey || nonce || blockhash(block.number - 1))`, where `block.number - 1` is the block immediately preceding the transaction's inclusion block. Using `blockhash(block.number)` is invalid in Solidity — it always returns zero within the same transaction; the valid range is `[block.number - 256, block.number - 1]`.
 
 #### Scenario: Session is recorded on-chain
 - **WHEN** `initSession` is called with valid parameters
-- **THEN** a unique `session_id` is returned and the session is stored with `status: OPEN`
+- **THEN** a unique `session_id` is returned and the session is stored with `status: OPEN`; `control_pubkey` is snapshotted from the current AnchorIdentity record for `agent_pubkey` into the session
+
+#### Scenario: Control key rotation does not invalidate open sessions
+- **WHEN** `revealControlKeyRotation` is confirmed while one or more sessions for the agent are OPEN
+- **THEN** those existing sessions retain their snapshotted `control_pubkey` and remain valid; only sessions initiated after the rotation use the new `control_pubkey`
 
 #### Scenario: Duplicate nonce is rejected
 - **WHEN** a verifier calls `initSession` with a nonce already used in a prior session for the same agent
