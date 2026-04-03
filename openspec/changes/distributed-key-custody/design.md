@@ -132,9 +132,9 @@ Current state: `packages/hashid-cli` exists as a Python package containing ML tr
 
 ### Decision 11: Operator accountability via signed nonce commitments
 
-**Choice:** Operators sign their nonce commitments with their AVS Ed25519 key and send them directly to the agent. The agent archives signed commitment sets to EigenDA. Nonce reuse is proved on-chain by submitting two signed commitments with identical `(D_i, E_i)` to `slashNonceReuse` — no Merkle proofs or per-session on-chain writes required.
+**Choice:** Operators sign their nonce commitments with their AVS Ed25519 key and send them directly to the agent. The agent archives signed commitment sets to EigenDA after each Round 1 (best-effort; signing is not blocked if archival fails). Nonce reuse is proved on-chain by submitting two signed commitments with identical `(D_i, E_i)` to `slashNonceReuse` — no Merkle proofs or per-session on-chain writes required.
 
-**Why:** The coordinator-centric Merkle root publication model required on-chain writes after every signing round and complex inclusion-proof flows for operators. The new model only touches the chain when fraud actually occurs (lazy). Operators are accountable for their own commitments directly — no trusted intermediate party needed. Two valid operator-signed commitments with the same nonce are conclusive, self-contained evidence regardless of any log.
+**Why:** The coordinator-centric Merkle root publication model required on-chain writes after every signing round and complex inclusion-proof flows for operators. The lazy archival model only touches the chain when fraud actually occurs. Operators are accountable for their own commitments directly — no trusted intermediate party needed. Two valid operator-signed commitments with the same nonce are conclusive, self-contained evidence regardless of any log. EigenDA write authorization is permissionless; the `db_commitment` FROST threshold signature is the sole authorization gate — a crafted record without a valid threshold signature cannot anchor a valid identity.
 
 ### Decision 12: Agent control key as mandatory signing gate
 
@@ -156,7 +156,7 @@ Neither factor alone is sufficient. Stealing the control key gives the ability t
 
 ### Decision 13: Coordinatorless, agent-driven signing
 
-**Choice:** Remove the AVS Coordinator as a separate infrastructure component. The agent drives the full signing flow: it reads operator endpoints from an on-chain registry, computes VRF sampling deterministically from on-chain data (`keccak256(session_id || blockhash(B-1))`), contacts operators directly for both DKG and threshold signing, and performs FROST aggregation itself.
+**Choice:** Remove the AVS Coordinator as a separate infrastructure component. The agent drives the full signing flow: it reads operator endpoints from an on-chain registry, computes VRF sampling deterministically from on-chain data (`keccak256(session_id || block.prevrandao)`), contacts operators directly for both DKG and threshold signing, and performs FROST aggregation itself.
 
 **Alternatives considered:**
 - *Keep coordinator as a convenience layer*: Reduces agent complexity but reintroduces T-038 (coordinator SPOF affecting all agents simultaneously), coordinator trust assumptions, coordinator bond/slashing complexity, and a coordinator-specific attack surface.
@@ -168,9 +168,32 @@ Neither factor alone is sufficient. Stealing the control key gives the ability t
 - Operators need publicly accessible endpoints (solved by on-chain registry)
 - No coordinator anonymization layer between agent IP and operators (acceptable — the agent is authorizing signing and its participation is not secret)
 
+### Decision 14: `block.prevrandao` as VRF seed input
+
+**Choice:** `initSession` stores `block.prevrandao` from the inclusion block as `session.vrf_randao`. The VRF seed is `keccak256(session_id || session.vrf_randao)`. `block.prevrandao` replaces the previously considered `blockhash(B-1)` approach.
+
+**Why:** `blockhash(B-1)` is available in Solidity but is controlled by block builders, who could mine for a favourable value. `block.prevrandao` is the beacon chain RANDAO value, contributed by the block proposer and mixed with accumulated randomness — it is not grindable by the verifier submitting the transaction. Storing `vrf_randao` in the session record makes the VRF seed independently recomputable by any party from on-chain data, which is required for `slashNonAcknowledgment` to verify VRF membership without off-chain proofs.
+
+### Decision 15: Session acknowledgment as mandatory liveness signal
+
+**Choice:** VRF-selected operators MUST submit `acknowledgeSession(session_id, operator_id, sig)` on-chain within 2 minutes of session creation. Failure to acknowledge is slashable via `slashNonAcknowledgment`.
+
+**Why:** The signing window is 30 minutes, but the verifier needs to know early whether enough operators are ready before committing challenges. The 2-minute acknowledgment window gives the agent a fast readiness signal: if fewer than K acknowledgments arrive, the agent can let the session expire and open a new one, rather than waiting the full 30 minutes to discover operator unavailability. Slashing non-acknowledgment creates economic pressure for operators to monitor on-chain events and respond promptly.
+
+### Decision 16: `initiateSuccessionWithEndorsement` as stolen-control-key recovery path
+
+**Choice:** When the agent's control key is compromised and an attacker is spamming `commitSuccession` at the rate limit, the agent can bypass `commitSuccession` entirely via `initiateSuccessionWithEndorsement` — submitting a K-of-N FROST threshold signature that supersedes any pending commitment and resets the rate limit. The standard 24-hour timelock and guardian veto still apply.
+
+**Why:** The rate limit (1-hour minimum between commits) that prevents succession spam also temporarily blocks the legitimate agent from filing their own commitment after an attacker fires first. The threshold-endorsed path provides a mechanism that cannot be blocked by a stolen control key: it requires K-of-N operator cooperation, which the attacker does not have. The 24-hour timelock is preserved because it is the guardian's detection window.
+
+### Decision 17: `spendSession` enforces exactly 5 Ed25519 signatures
+
+**Choice:** `spendSession(session_id, signatures[5])` verifies all 5 signatures on-chain before marking the session SPENT. The contract reverts if any signature is missing or fails verification. The session remains OPEN until all 5 signatures are valid.
+
+**Why:** Partial session spending would allow a verifier to mark a session spent on fewer than 5 valid signatures, circumventing the full verification requirement. Requiring all 5 on-chain closes the race condition where an attacker could interleave a partial spend with a legitimate completion. The atomic all-or-nothing check is simpler to reason about and leaves no partial-state edge cases.
+
 ## Open Questions
 
 - **AVS contract audit scope**: Which slashing conditions in the initial audit? Minimal (equivocation only) vs. expanded (nonce reuse, unauthorized signing)?
 - **Operator count at genesis**: Need N ≥ 10 for meaningful security; operator incentive mechanism (AVS fee sharing) TBD.
-- **Session fee model**: Does the verifier pay a fee to `initSession`? Who pays operators for co-signing work?
-- **EigenDA write authorization**: Is the identity record write gated by the AVS contract, or is EigenDA open-write with on-chain commitment as the integrity anchor?
+- **Economic model**: Slash amounts, signing fees, and operator reward distribution are deferred to a separate change (T-045).
