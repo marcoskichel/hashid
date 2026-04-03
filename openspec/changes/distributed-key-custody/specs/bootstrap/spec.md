@@ -40,6 +40,18 @@ The system SHALL publish the identity record to EigenDA and call `AnchorIdentity
 - **WHEN** the EigenDA write fails
 - **THEN** bootstrap fails and no on-chain call is made
 
+#### Scenario: EigenDA write is permissionless — db_commitment is the sole authorization
+- **WHEN** the agent writes the identity record to EigenDA
+- **THEN** no EigenDA-level access control is required; the write is permissionless; authorization is established entirely by the `db_commitment` FROST threshold signature, which can only be produced with K-of-N operator cooperation; a crafted EigenDA record written by any other party cannot produce a valid `db_commitment` without that cooperation
+
+#### Scenario: AnchorIdentity does not read EigenDA on-chain
+- **WHEN** `AnchorIdentity(group_pubkey, control_pubkey, eigenda_record_id, db_commitment)` is called
+- **THEN** the contract does NOT fetch or validate the EigenDA record contents on-chain; it stores `eigenda_record_id` as an opaque reference and verifies `db_commitment` as a FROST Ed25519 signature over `sha256(agent_id || group_pubkey || control_pubkey)`; verifiers independently fetch and validate the EigenDA record off-chain
+
+#### Scenario: Crafted EigenDA record cannot anchor a valid identity
+- **WHEN** an attacker writes a crafted identity record to EigenDA and calls `AnchorIdentity` with the resulting `eigenda_record_id`
+- **THEN** the call reverts unless the attacker also supplies a valid `db_commitment` — a FROST threshold signature requiring K-of-N operator cooperation that the attacker does not possess
+
 ## ADDED Requirements
 
 ### Requirement: Bootstrap is implemented in TypeScript

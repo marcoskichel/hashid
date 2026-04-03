@@ -133,6 +133,27 @@ If a guardian address is registered on the agent's identity record, the guardian
 - **WHEN** `vetoSuccession` is called after `revealSuccession` has already been confirmed
 - **THEN** the contract reverts with a no-pending-commitment error
 
+### Requirement: Succession initiation via K-of-N threshold endorsement
+When the agent's control key is suspected compromised and an attacker is using it to spam `commitSuccession` at the rate limit, the agent MAY bypass `commitSuccession` entirely by submitting a K-of-N FROST threshold endorsement. The agent requests K-of-N current operators to threshold-sign `{ agent_id, new_group_pubkey, new_control_pubkey, timestamp }` and calls `initiateSuccessionWithEndorsement(agent_id, new_group_pubkey, new_control_pubkey, timestamp, threshold_signature)` on-chain.
+
+This call: (1) supersedes any pending commitment regardless of the 1-hour rate limit, (2) records the succession commitment with a 24-hour timelock starting from the call time, and (3) counts the endorsed initiation as the rate-limit slot (preventing rapid re-use). The standard 24-hour timelock and guardian veto capability apply identically to this path. The reveal is performed via the existing `revealSuccession` call.
+
+#### Scenario: Endorsed initiation supersedes a pending attacker commitment
+- **WHEN** `initiateSuccessionWithEndorsement` is called with a valid K-of-N threshold signature while an attacker's `commitSuccession` commitment is pending
+- **THEN** the attacker's pending commitment is cancelled and the endorsed commitment is recorded; the 1-hour rate-limit window is reset from this call time
+
+#### Scenario: Endorsed initiation without valid threshold signature is rejected
+- **WHEN** `initiateSuccessionWithEndorsement` is called with a signature that does not verify against the agent's `group_pubkey`
+- **THEN** the contract reverts; any existing pending commitment is unchanged
+
+#### Scenario: Expired endorsement timestamp is rejected
+- **WHEN** `initiateSuccessionWithEndorsement` is called with a `timestamp` more than 1 hour old
+- **THEN** the contract reverts with an endorsement-expired error; the agent must obtain a fresh threshold signature
+
+#### Scenario: 24-hour timelock still applies to endorsed initiation
+- **WHEN** `initiateSuccessionWithEndorsement` is confirmed on-chain
+- **THEN** `revealSuccession` cannot be called until 24 hours have elapsed; the guardian may veto within this window
+
 ### Requirement: Succession rate limiting
 The `SuccessionRegistry` contract SHALL enforce: (1) a minimum of 1 hour between successive `commitSuccession` calls for the same agent, and (2) a maximum chain length of 100 succession entries per agent.
 
