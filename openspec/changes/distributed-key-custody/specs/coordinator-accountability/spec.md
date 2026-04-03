@@ -29,11 +29,11 @@ Operators SHOULD also apply IP-based rate limiting as a first line of defence ag
 - **THEN** it proceeds to cryptographic verification normally; the connection counter for that agent_pubkey starts at 1
 
 ### Requirement: Operator-signed nonce commitments
-Before sending Round 1 nonce commitments to the agent, each operator SHALL sign the commitment with its registered AVS Ed25519 key: `sign({ session_id, round_index, D_i, E_i, timestamp }, operator_avs_key)`. The signed commitment SHALL accompany the raw `(D_i, E_i)` values in the Round 1 response. The signature creates a non-repudiable record binding the operator to a specific nonce for a specific session and round.
+Before sending Round 1 nonce commitments to the agent, each operator SHALL sign the commitment with its registered AVS Ed25519 key: `sign({ session_id, round_index, epoch, D_i, E_i, timestamp }, operator_avs_key)`. The signed commitment SHALL accompany the raw `(D_i, E_i)` values in the Round 1 response. The signature creates a non-repudiable record binding the operator to a specific nonce for a specific session and round.
 
 #### Scenario: Operator sends signed nonce commitment in Round 1
 - **WHEN** an operator completes nonce generation for Round 1
-- **THEN** it sends `{ D_i, E_i, signature: sign({ session_id, round_index, D_i, E_i, timestamp }, avs_key) }` directly to the agent before any partial signature is computed
+- **THEN** it sends `{ D_i, E_i, epoch, signature: sign({ session_id, round_index, epoch, D_i, E_i, timestamp }, avs_key) }` directly to the agent before any partial signature is computed
 
 #### Scenario: Unsigned nonce commitment is rejected
 - **WHEN** an operator sends a Round 1 nonce commitment without a valid AVS key signature

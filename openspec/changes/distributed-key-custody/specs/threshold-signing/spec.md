@@ -23,6 +23,7 @@ Before generating any nonce material, an operator SHALL verify:
 4. `keccak256(raw_challenge)` is in `session.challenge_hashes`
 5. `sha256(raw_challenge || session_id) == message`
 6. The operator's own staked balance meets the AVS minimum
+7. The epoch in the signing request matches the operator's current active share epoch
 
 If any check fails, the operator SHALL reject the request, emit a signed rejection receipt to the agent, and generate no nonce material.
 
@@ -40,7 +41,7 @@ nonce_material = HKDF-SHA-512(
 
 #### Scenario: All pre-checks pass — signed commitment sent to agent
 - **WHEN** an operator validates all six pre-checks successfully
-- **THEN** it generates `(d_i, e_i)` via the hybrid HKDF scheme and sends `{ D_i: d_i·G, E_i: e_i·G, signature: sign({ session_id, round_index, D_i, E_i, timestamp }, avs_key) }` directly to the agent
+- **THEN** it generates `(d_i, e_i)` via the hybrid HKDF scheme and sends `{ D_i: d_i·G, E_i: e_i·G, epoch, signature: sign({ session_id, round_index, epoch, D_i, E_i, timestamp }, avs_key) }` directly to the agent
 
 #### Scenario: Failed auth token — rejection receipt sent
 - **WHEN** `ed25519.verify(auth_token, session_id || message_hash || token_nonce, control_pubkey)` returns false
@@ -53,6 +54,10 @@ nonce_material = HKDF-SHA-512(
 #### Scenario: Challenge not committed — rejection receipt sent
 - **WHEN** `keccak256(raw_challenge)` is not in `session.challenge_hashes`
 - **THEN** the operator sends a signed rejection receipt with reason `"challenge-not-committed"` and generates no nonce material
+
+#### Scenario: Epoch mismatch — rejection receipt sent
+- **WHEN** the epoch in the signing request does not match the operator's current active share epoch
+- **THEN** the operator sends a signed rejection receipt with reason `"epoch-mismatch"` and generates no nonce material
 
 #### Scenario: Nonce scalars are zeroed after signing
 - **WHEN** the partial signature is computed in Round 2
@@ -83,6 +88,10 @@ Upon receiving the aggregated nonce commitment from the agent, each of the K ope
 #### Scenario: Operator session re-verification before Round 2
 - **WHEN** an operator receives the Round 2 message from the agent
 - **THEN** it re-verifies that the session is still `status: OPEN` on-chain before computing the partial signature
+
+#### Scenario: Epoch change between rounds causes explicit rejection
+- **WHEN** an operator receives the Round 2 message and its current active share epoch no longer matches the epoch stamped in its Round 1 signed commitment for this session
+- **THEN** the operator sends a signed rejection receipt with reason `"epoch-changed-between-rounds"` and does NOT compute a partial signature; the agent receives an explicit failure signal and may retry the signing request under the new epoch
 
 ### Requirement: Agent FROST aggregation
 After collecting K partial signatures, the agent SHALL aggregate them into a single Ed25519 signature using the FROST aggregation algorithm: `z = Σ z_i mod q`. The agent SHALL verify the assembled signature against the group public key before accepting it: `ed25519.verify(sig, message, group_pubkey)`. If verification fails, the agent discards the assembled signature and may retry the entire signing request.

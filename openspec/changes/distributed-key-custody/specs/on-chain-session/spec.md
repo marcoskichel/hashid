@@ -103,3 +103,20 @@ The `SessionRegistry` contract SHALL enforce a maximum of `N × 2` concurrent OP
 #### Scenario: Spent or expired sessions restore per-agent capacity
 - **WHEN** one of an agent's open sessions becomes SPENT or expires
 - **THEN** the per-agent open session count decreases and a new session for that agent may be created
+
+### Requirement: Session abandonment tracking and slashing
+The `SessionRegistry` contract SHALL track per-(verifier_address, agent_pubkey) expired session counts. A session is considered abandoned when it transitions from OPEN to expired without being spent. When a verifier accumulates 3 or more abandoned sessions against the same agent_pubkey within any rolling 60-minute window, any party MAY call `slashSessionAbandonment(verifier_address, agent_pubkey, session_ids[])`. The contract SHALL verify each session ID in the array was opened by the verifier for the agent, each has expired unspent, and all fall within the same 60-minute window. If all checks pass, the contract SHALL slash a portion of the verifier's bond.
+
+This closes the monopolization attack where a small number of colluding registered verifiers repeatedly open and abandon sessions to saturate a target agent's session capacity.
+
+#### Scenario: Abandonment threshold triggers slash eligibility
+- **WHEN** a verifier has allowed 3 or more sessions against the same agent_pubkey to expire unspent within 60 minutes
+- **THEN** any party may call `slashSessionAbandonment` with those session IDs as proof; the contract verifies the sessions, confirms they are expired and unspent, and slashes the verifier's bond
+
+#### Scenario: Legitimate session expiry below threshold is not penalised
+- **WHEN** a verifier opens sessions that expire unspent but the count is fewer than 3 against the same agent within 60 minutes
+- **THEN** no slash is possible; normal session expiry is not punishable
+
+#### Scenario: Slash proof requires sessions from the same verifier-agent pair
+- **WHEN** `slashSessionAbandonment` is called with session IDs that mix different verifiers or different agent pubkeys
+- **THEN** the contract reverts with an invalid-proof error
