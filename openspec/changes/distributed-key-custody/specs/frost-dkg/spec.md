@@ -107,16 +107,16 @@ This requirement closes T-039: a compromised agent machine can propose an attack
 - **THEN** the contract reverts with an authorization-expired error; the agent must obtain a fresh endorsement
 
 ### Requirement: Operator concentration limit at DKG initiation
-Before a DKG ceremony begins, the AVS contract SHALL verify that no single Ethereum address controls more than `floor((K-1)/N)` of the total operator seats, where K is the signing threshold and N is the total operator count. `DKGInit` SHALL revert if any address exceeds this limit. An address "controls" an operator seat if it is the operator's registered withdrawal address, signing key, or a known delegation relationship recorded in the AVS contract.
+Before a DKG ceremony begins, the AVS contract SHALL verify that no single Ethereum address controls more than `N - K` of the total operator seats, where K is the signing threshold and N is the total operator count. `DKGInit` SHALL revert if any address exceeds this limit. An address "controls" an operator seat if it is the operator's registered withdrawal address, signing key, or a known delegation relationship recorded in the AVS contract.
 
 #### Scenario: Concentration check passes — DKG proceeds
-- **WHEN** no single address controls more than `floor((K-1)/N)` operator seats
+- **WHEN** no single address controls more than `N - K` operator seats
 - **THEN** `DKGInit` is accepted and the ceremony begins
 
 #### Scenario: Concentration check fails — DKGInit reverts
-- **WHEN** any single address controls more than `floor((K-1)/N)` operator seats
+- **WHEN** any single address controls more than `N - K` operator seats
 - **THEN** `DKGInit` reverts with an operator-concentration-exceeded error before any key material is generated
 
 #### Scenario: Concentration limit scales with threshold parameters
 - **WHEN** K and N change (e.g., during resharing with a different operator set)
-- **THEN** the concentration limit `floor((K-1)/N)` is recomputed for the new parameters
+- **THEN** the concentration limit is recomputed as `N - K` for the new parameters

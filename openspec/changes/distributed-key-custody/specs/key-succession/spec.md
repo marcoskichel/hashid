@@ -34,6 +34,10 @@ The coordinator SHALL NOT signal ceremony completion to any operator until all N
 - **WHEN** 30 minutes elapse after Phase 1 without all N Phase 2 confirmations
 - **THEN** the coordinator broadcasts a ceremony abort; all operators discard their new shares and retain old shares; the epoch counter does not advance
 
+#### Scenario: Non-confirmation within timeout is slashable
+- **WHEN** 30 minutes elapse after Phase 1 completion without a Phase 2 confirmation from a specific operator
+- **THEN** any party may submit `slashNonConfirmation(operator_id, epoch, signed_share_receipt)` on-chain, where `signed_share_receipt` is the operator's signed acknowledgement of receiving their Phase 1 share; the contract verifies the receipt and slashes the operator's EigenLayer stake
+
 #### Scenario: Old shares invalidated only after unanimous confirmation
 - **WHEN** all N operators have submitted valid Phase 2 confirmations
 - **THEN** the coordinator signals completion; operators invalidate old shares; the epoch counter advances
@@ -52,6 +56,17 @@ After resharing ceremony completion (all N Phase 2 confirmations received), each
 #### Scenario: Deletion attestation epoch matches resharing epoch
 - **WHEN** a deletion attestation is submitted with an epoch that does not match the completed resharing epoch
 - **THEN** the attestation is rejected as invalid
+
+### Requirement: Phase 2 non-confirmation slashing
+The AVS contract SHALL expose a `slashNonConfirmation(operator_id, epoch, signed_share_receipt)` function. The `signed_share_receipt` is a signed message `{ operator_id, epoch, action: "share_received", timestamp }` produced by the operator upon receiving their Phase 1 share, establishing that the operator received and acknowledged its new share. If the operator signed a receipt but did not submit a Phase 2 confirmation within 30 minutes of receipt, this receipt combined with the absence of an on-chain confirmation record is conclusive evidence of non-confirmation. The contract SHALL slash the operator if: the receipt signature verifies under the operator's registered AVS key, the epoch matches a completed Phase 1 with no corresponding Phase 2 confirmation from that operator, and 30 minutes have elapsed since the receipt timestamp.
+
+#### Scenario: Valid non-confirmation proof triggers slashing
+- **WHEN** `slashNonConfirmation` is called with a valid signed share receipt and no Phase 2 confirmation exists for that operator and epoch after 30 minutes
+- **THEN** the contract verifies the receipt signature and slashes the operator's EigenLayer stake
+
+#### Scenario: Operator that confirmed on time cannot be slashed
+- **WHEN** `slashNonConfirmation` is called for an operator that did submit a Phase 2 confirmation within the window
+- **THEN** the contract reverts with a confirmation-exists error
 
 ### Requirement: Full keypair succession — commit phase
 When a full keypair rotation is needed, the initiating party SHALL submit a commitment `keccak256(agent_id || old_pubkey || new_pubkey || salt)` to the `SuccessionRegistry` contract. The contract SHALL record the commitment and the committing address. The `new_pubkey` is not revealed on-chain during this phase. A commitment expires automatically after 48 hours if not revealed. After expiry, a new commitment may be submitted (subject to the 1-hour minimum between commits).
@@ -127,6 +142,27 @@ The registered guardian address MAY be rotated using the same commit-reveal + 24
 #### Scenario: Guardian rotation can be vetoed by the current guardian
 - **WHEN** the current guardian calls `vetoGuardianRotation` within the 24-hour window
 - **THEN** the pending guardian rotation commitment is cancelled
+
+### Requirement: Emergency guardian rotation via K-of-N threshold endorsement
+When the registered guardian address is known or suspected compromised, the agent MAY rotate the guardian immediately — bypassing the 24-hour timelock and the current guardian's veto capability — by submitting a K-of-N FROST threshold endorsement. The agent requests K-of-N current operators to threshold-sign `{ agent_id, new_guardian_address, timestamp }` and submits the assembled signature to `rotateGuardianWithEndorsement(agent_id, new_guardian_address, timestamp, threshold_signature)` on-chain. The contract verifies the threshold signature against the agent's registered `group_pubkey` and updates the guardian address immediately. The current guardian CANNOT veto this path.
+
+This path is the recovery mechanism when an attacker has stolen the guardian key: a compromised guardian key alone cannot authorize this rotation (K-of-N operator cooperation is required), so the attacker cannot use a stolen key to block the legitimate agent from replacing the guardian.
+
+#### Scenario: Emergency guardian rotation completes immediately
+- **WHEN** `rotateGuardianWithEndorsement` is called with a valid K-of-N threshold signature over `{ agent_id, new_guardian_address, timestamp }`
+- **THEN** the contract verifies the signature against `group_pubkey`, updates the registered guardian address immediately, and emits a `GuardianRotatedByEndorsement` event; no 24-hour timelock applies
+
+#### Scenario: Stolen guardian key cannot block emergency rotation
+- **WHEN** the current guardian key is held by an attacker who calls `vetoGuardianRotation`
+- **THEN** the veto has no effect on a pending `rotateGuardianWithEndorsement` call; the threshold-endorsed rotation completes regardless
+
+#### Scenario: Emergency rotation without valid threshold signature is rejected
+- **WHEN** `rotateGuardianWithEndorsement` is called with a signature that does not verify against `group_pubkey`
+- **THEN** the contract reverts; the guardian address is unchanged
+
+#### Scenario: Expired endorsement is rejected
+- **WHEN** `rotateGuardianWithEndorsement` is called with a `timestamp` more than 1 hour old
+- **THEN** the contract reverts with an endorsement-expired error; the agent must obtain a fresh threshold signature
 
 ### Requirement: Guardian term expiry and mandatory renewal
 A guardian address is registered with a 6-month term. Before the term expires, the guardian SHALL sign and submit a renewal transaction to extend their guardianship for another 6-month term. If the guardian term expires without renewal, the guardianship lapses: succession commitments proceed with the 24-hour timelock only, with no veto capability, until a new guardian is registered.
