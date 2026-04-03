@@ -39,9 +39,9 @@ classDiagram
         <<aggregate root>>
         +agentId: string
         +thresholdPubkey: Ed25519PublicKey
+        +controlPubkey: Ed25519PublicKey
         +eigenDaRecordId: string
         +dbCommitment: Ed25519Signature
-        +successor: SuccessionEntryRef | null
     }
 
     class SuccessionEntry {
@@ -53,8 +53,7 @@ classDiagram
         +signature: Ed25519Signature
     }
 
-    IdentityRecord *-- SuccessionEntry : contains (via ref)
-    IdentityRecord --> Ed25519PublicKey : thresholdPubkey
+    IdentityRecord --> Ed25519PublicKey : thresholdPubkey / controlPubkey
     IdentityRecord --> Ed25519Signature : dbCommitment
     SuccessionEntry --> Ed25519PublicKey : oldPubkey / newPubkey
     SuccessionEntry --> Ed25519Signature : signature

@@ -139,4 +139,4 @@ graph TB
 
 Operators must discard old shares immediately upon epoch advancement. Retaining them provides no signing capability and represents unnecessary key material exposure. The group public key remaining constant means all existing verifications, on-chain anchors, and verifier trust anchors remain valid without any update.
 
-In practice, old shares are kept valid until all N operators confirm new share receipt (Phase 2 of the resharing protocol). Once all confirmations are in, operators invalidate old shares and submit a signed deletion attestation to the coordinator within 24 hours. Failure to attest is slashable via the nonce commitment log.
+In practice, old shares are kept valid until all N operators confirm new share receipt (Phase 2 of the resharing protocol). Once all confirmations are in, operators invalidate old shares and submit a signed deletion attestation on-chain within 24 hours. Failure to attest is slashable via `slashNonConfirmation`.

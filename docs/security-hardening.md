@@ -12,7 +12,7 @@ Five threats require structural changes before mainnet:
 |---|---|---|---|
 | H-1 | T-001, T-004 | FROST nonce reuse → key recovery | Critical |
 | H-2 | T-002, T-003 | Missing DKG proof-of-knowledge → rogue key | Critical |
-| H-3 | T-013, T-007 | Coordinator MITM → sign arbitrary messages | High |
+| H-3 | T-013, T-007 | Agent-machine compromise → sign arbitrary messages | High |
 | H-4 | T-026, T-018 | Succession frontrunning + injection | High |
 | H-5 | T-029–031 | Supply chain + operator memory | Critical |
 
@@ -25,7 +25,7 @@ DKG PoK (H-2) ensures the group key is honest from genesis
    ↓
 Nonce safety (H-1) ensures each signing operation is one-way
    ↓
-Coordinator binding (H-3) ensures the coordinator cannot redirect what is signed
+Challenge binding (H-3) ensures a compromised agent machine cannot redirect what is signed
    ↓
 Succession protection (H-4) ensures key rotation cannot be hijacked
 ```
@@ -57,11 +57,11 @@ nonce_material = HKDF-SHA-512(
 (d_i, e_i) = reduce_mod_q(nonce_material[0:32], nonce_material[32:64])
 ```
 
-The `session_id` in `info` ensures that even if the OS CSPRNG returns identical bytes after a VM restore (the counter-reset failure mode), the nonces still differ across sessions. A deterministic-only scheme per RFC 9591 Appendix B is insufficient alone because a coordinator that replays the same message with the same session_id would produce identical nonces; the random salt prevents this.
+The `session_id` in `info` ensures that even if the OS CSPRNG returns identical bytes after a VM restore (the counter-reset failure mode), the nonces still differ across sessions. A deterministic-only scheme per RFC 9591 Appendix B is insufficient alone because replaying the same message with the same session_id would produce identical nonces; the random salt prevents this.
 
-**Coordinator nonce commitment log**
+**Agent nonce commitment log**
 
-The coordinator maintains an append-only log per signing round:
+The agent maintains an append-only local log of all signed nonce commitments received from operators:
 
 ```
 NonceLogEntry {
@@ -70,30 +70,25 @@ NonceLogEntry {
   round_index  : uint8    // 0–4 for 5 challenges per session
   D_i          : bytes32  // compressed Ed25519 point
   E_i          : bytes32  // compressed Ed25519 point
-  z_i          : bytes32  // partial signature scalar (ephemeral, purged after slash window)
   epoch        : uint32   // share epoch (increments on resharing)
   timestamp    : uint64
+  signature    : bytes64  // operator AVS key signature over the above fields
 }
 ```
 
-Before forwarding any Round 1 commitment from an operator, the coordinator checks that `(operator_id, D_i, E_i)` has not appeared in any prior entry. If it has, the coordinator aborts the session immediately and records the evidence.
+Each operator signs its nonce commitment before sending it to the agent. The agent archives the complete set of signed commitments for each signing round to EigenDA and records the resulting EigenDA record ID locally alongside the session ID and round index. These archived commitments are the source material for fraud proof submissions.
 
-The coordinator publishes a Merkle root of the nonce log to `SessionRegistry` at the close of each signing round.
-
-**On-chain slashing — no Ed25519 arithmetic required**
+**On-chain slashing — lazy, no Merkle proofs required**
 
 ```
 slashNonceReuse(
     operatorId,
-    sessionId1,
-    sessionId2,
-    D_i, E_i,              // identical nonce commitment
-    merkleProof1,          // inclusion proof: (operatorId, sessionId1, D_i, E_i) ∈ log root 1
-    merkleProof2           // inclusion proof: (operatorId, sessionId2, D_i, E_i) ∈ log root 2
+    signed_commitment_a,   // { session_id, round_index, D_i, E_i, timestamp, signature }
+    signed_commitment_b    // { session_id, round_index, D_i, E_i, timestamp, signature }
 )
 ```
 
-The contract verifies Merkle inclusion (keccak256 only), confirms `sessionId1 ≠ sessionId2`, and slashes. No elliptic curve arithmetic on-chain. The nonce commitment equality is conclusive proof of misbehavior — an honest operator using the hybrid scheme cannot produce identical `(D_i, E_i)` for two different sessions.
+The contract slashes the operator if: both signatures verify under the operator's registered AVS Ed25519 key, both commitments contain identical `(D_i, E_i)` values, and the two commitments do not have both the same `session_id` and the same `round_index`. No Merkle proofs, no elliptic curve arithmetic on-chain. The nonce commitment equality combined with valid operator signatures is conclusive proof of misbehavior — an honest operator using the hybrid scheme cannot produce identical `(D_i, E_i)` for two different sessions or rounds.
 
 **Memory safety**
 
@@ -110,9 +105,9 @@ Use `sodium-native`'s `sodium_memzero` where available. Disable `--inspect`, hea
 
 In `specs/threshold-signing/spec.md`:
 - Replace "generate fresh nonce from CSPRNG" with the exact RFC 9591 hybrid derivation formula.
-- Add requirement: coordinator maintains a nonce commitment log; duplicate `(D_i, E_i)` for the same operator across sessions is a slashable condition.
+- Add requirement: agent maintains a nonce commitment log; duplicate `(D_i, E_i)` for the same operator across sessions is a slashable condition.
 - Add requirement: partial signature scalars `(d_i, e_i)` are zeroed immediately after `z_i` is computed, before transmission.
-- Add slashing scenario using the Merkle proof mechanism above.
+- Add slashing scenario using the lazy signed-commitment mechanism above.
 
 ---
 
@@ -155,7 +150,7 @@ If any proof fails: abort ceremony, broadcast complaint identifying culprit ℓ,
 **Who verifies**
 
 - Each operator verifies all peers' PoK independently — this is the primary control.
-- The coordinator also verifies before relaying — defence in depth only. A compromised coordinator that skips verification is caught by honest operators.
+- The agent also verifies before relaying — defence in depth only. A misbehaving agent that skips verification is caught by honest operators.
 
 **Test vectors**
 
@@ -181,15 +176,15 @@ In `specs/frost-dkg/spec.md`, the "Round 1 — commitment broadcast" requirement
 
 ---
 
-## H-3: Coordinator Message Binding
+## H-3: Challenge Pre-commitment Binding
 
-**Threats addressed:** T-013 (coordinator MITM), T-007 (coordinator as implicit trust anchor)
+**Threats addressed:** T-013 (agent-machine message substitution), T-007 (agent as implicit trust anchor)
 
 ### Problem
 
-The current design signs `sha256(challenge || session_id)`. This binds signatures to sessions (preventing cross-session replay) but does not prevent a compromised coordinator from substituting `challenge` with an attacker-controlled payload before forwarding to operators. Operators have no basis to reject the substitution — they only check that `session_id` is open on-chain.
+The current design signs `sha256(challenge || session_id)`. This binds signatures to sessions (preventing cross-session replay) but does not prevent a compromised agent machine from substituting `challenge` with an attacker-controlled payload before forwarding to operators. Operators have no basis to reject the substitution — they only check that `session_id` is open on-chain.
 
-A fully compromised coordinator can therefore coerce the entire operator network into signing arbitrary messages under the agent's threshold key, as long as it presents a valid open session.
+Because the agent is the FROST coordinator for its own signing sessions, a compromised agent machine can coerce the operator network into signing arbitrary messages under the agent's threshold key, as long as it presents a valid open session.
 
 ### Solution
 
@@ -216,17 +211,17 @@ Before generating or broadcasting any nonce material, the operator verifies:
 
 1. `session_id` exists on-chain with `status: OPEN` (existing).
 2. `keccak256(raw_challenge) ∈ session.challenge_hashes` (new).
-3. `sha256(raw_challenge || session_id) == message` (new, verifies the coordinator formed the message correctly).
+3. `sha256(raw_challenge || session_id) == message` (new, verifies the agent formed the message correctly).
 
 If check 2 or 3 fails: refuse, return error, generate no nonces. Placing the check at Round 1 (before nonce commitment) is mandatory — placing it at Round 2 would allow nonce commitments to be extracted before the refusal, creating nonce-correlation surface (feeding T-001).
 
 **Fraud detection (complementary)**
 
-Operators emit a signed rejection receipt `{ session_id, message_hash, challenge_hash, round: "1", timestamp }` to an off-chain log when refusing a request. A threshold of operator rejections for a session constitutes prima facie evidence of coordinator misbehavior and triggers a coordinator bond slash in the `SessionRegistry`.
+Operators emit a signed rejection receipt `{ session_id, message_hash, challenge_hash, round: "1", timestamp }` to the requesting agent when refusing a request. The agent stores rejection receipts locally alongside the session record. A pattern of operator rejections for a session is evidence of agent-machine misbehavior.
 
 **Interaction with H-1**
 
-The coordinator nonce log (H-1) now contains `message_hash` entries that are verifiable against the on-chain `challenge_hashes`. This makes it possible to detect a coordinator that routes a non-committed message (it would appear in the log but not match any `challenge_hashes` entry), even if the operator check catches it first.
+The agent nonce log (H-1) now contains `message_hash` entries that are verifiable against the on-chain `challenge_hashes`. This makes it possible to detect an agent that routes a non-committed message (it would appear in the log but not match any `challenge_hashes` entry), even if the operator check catches it first.
 
 **Spec changes required**
 
@@ -388,10 +383,9 @@ The following `AnchorIdentity` / `SessionRegistry` changes are required across H
 
 | Contract | Change | Hardening |
 |---|---|---|
-| `SessionRegistry.initSession` | Add `bytes32[5] challenge_hashes` parameter | H-3: coordinator binding |
+| `SessionRegistry.initSession` | Add `bytes32[5] challenge_hashes` parameter | H-3: challenge binding |
 | `SessionRegistry.SessionRecord` | Add `challengeHashes: bytes32[5]` field | H-3 |
-| `SessionRegistry` | Add `slashNonceReuse` with Merkle proof verification | H-1 |
-| `SessionRegistry` | Publish nonce log Merkle root after each signing round | H-1 |
+| `SessionRegistry` | Add `slashNonceReuse` with lazy signed-commitment verification | H-1 |
 | `AnchorIdentity` | Add `commit(bytes32 commitment_hash)` | H-4: commit-reveal |
 | `AnchorIdentity` | Add `reveal(agent_id, old_pubkey, new_pubkey, salt, sig)` with 24h timelock | H-4 |
 | `AnchorIdentity` | Add `vetoSuccession(agent_id)` callable by registered guardian | H-4 |

@@ -2,7 +2,7 @@
 
 HashID is a distributed key custody system for agent identity. An agent's Ed25519 signing key is never held by any single party — it is split via FROST DKG (RFC 9591) across a set of EigenLayer AVS operators using a K-of-N (ceil(N x 2/3)) threshold. Signing requires coordinated participation of a supermajority of sampled operators. Verification sessions are anchored on-chain in `SessionRegistry`; identity records are stored in EigenDA with on-chain commitment in `AnchorIdentity`.
 
-This threat model covers the full attack surface: the FROST DKG and signing protocols, the AVS coordinator and operator infrastructure, the on-chain contracts (`SessionRegistry`, `AnchorIdentity`), the EigenDA storage layer, the key succession chain, and the supply chain of critical dependencies. It assumes a rational, well-resourced adversary but does not model nation-state-level compromise of the underlying Ethereum chain itself.
+This threat model covers the full attack surface: the FROST DKG and signing protocols, the operator infrastructure, the on-chain contracts (`SessionRegistry`, `AnchorIdentity`), the EigenDA storage layer, the key succession chain, and the supply chain of critical dependencies. It assumes a rational, well-resourced adversary but does not model nation-state-level compromise of the underlying Ethereum chain itself.
 
 ---
 
@@ -15,7 +15,7 @@ graph LR
         CHAIN["Ethereum On-chain"]
         INFRA["Operator Infrastructure"]
         SUPPLY["Supply Chain"]
-        COORD["AVS Coordinator"]
+        AGENT["Agent Machine"]
     end
 
     subgraph Components["System Components"]
@@ -34,7 +34,7 @@ graph LR
     CHAIN -->|pubkey squatting, chain injection| AI
     CHAIN -->|frontrun, infinite chain| SUCC
     INFRA -->|exfiltration, collusion, sybil, DoS| OPS
-    COORD -->|MITM on message, SPOF| SIGN
+    AGENT -->|message substitution, control key theft| SIGN
     SUPPLY -->|malicious library, SDK backdoor, runtime vuln| DKG
     SUPPLY -->|malicious library, SDK backdoor, runtime vuln| SIGN
     EDA -->|data withholding, availability attack| EDA
@@ -51,11 +51,11 @@ graph LR
 ### T-001: FROST Nonce Reuse Leading to Private Key Share Recovery
 
 - **Category**: Cryptographic
-- **Attacker**: Passive network observer or compromised coordinator
+- **Attacker**: Passive network observer or compromised operator node
 - **Prerequisite**: Ability to observe two partial signatures from the same operator, both using the same nonce pair `(d, e)` but over different messages
 - **Attack**: RFC 9591 Section 7.3 documents this attack precisely. In FROST, each partial signature has the form `z_i = d_i + e_i * rho_i + lambda_i * s_i * c`, where `(d_i, e_i)` are the nonce scalars and `s_i` is the secret share. If `(d_i, e_i)` are identical across two signing rounds for messages `m` and `m'`, the attacker obtains two equations `z_i` and `z_i'` that differ only in their challenge scalar `c` vs `c'`. Subtracting yields `z_i - z_i' = lambda_i * s_i * (c - c')`. Since `lambda_i` (Lagrange coefficient) and both challenges are fully public, the attacker solves for `s_i` directly.
 - **Impact**: Full recovery of operator `i`'s FROST key share. With enough shares recovered (>= K), the group private key can be reconstructed and the agent's identity is permanently forged.
-- **Current mitigation**: The design (design.md, threshold-signing/spec.md) mandates fresh CSPRNG-derived nonces per signing request. Nonce reuse is listed as a slashable condition. The coordinator can detect reuse by observing `(operator_id, nonce_commitment)` pairs across sessions.
+- **Current mitigation**: The design (design.md, threshold-signing/spec.md) mandates fresh CSPRNG-derived nonces per signing request. Nonce reuse is listed as a slashable condition. The agent logs signed nonce commitments `(operator_id, D_i, E_i, signature)` across sessions and can detect reuse.
 - **Gap / Recommendation**: The spec states nonce reuse is "detectable" but does not specify the detection mechanism or the on-chain slashing path. The coordinator must maintain a per-operator log of emitted nonce commitments and enforce that no commitment is recycled. This log should be written to a tamper-evident store. The slashing condition must be encoded in the AVS contract and audited before mainnet. Operators should use deterministic nonce derivation as a defense-in-depth measure (RFC 9591 Appendix B: derive nonces from HMAC(secret_share, message)), ensuring that even a buggy CSPRNG that returns repeated values cannot produce two different messages with the same nonce.
 - **Severity**: Critical
 
@@ -90,10 +90,10 @@ graph LR
 ### T-004: Partial Signature Grinding to Reconstruct a Key Share
 
 - **Category**: Cryptographic
-- **Attacker**: Compromised coordinator or passive observer with long-term access to partial signature traffic
+- **Attacker**: Passive observer with long-term access to partial signature traffic, or compromised operator node
 - **Prerequisite**: Ability to collect partial signatures from the same operator `i` across many independent signing sessions; knowledge of corresponding messages and nonce commitments
-- **Attack**: Each partial signature `z_i` is a linear function of the secret share `s_i`. Across multiple sessions, the attacker collects `(z_i, c, lambda_i, nonce_commitment)` tuples. While FROST's per-request nonce generation means these equations are not directly solvable (each uses a fresh nonce, adding a new unknown), an attacker with a compromised operator infrastructure could record the nonce scalars `(d_i, e_i)` at generation time. With those nonces in hand, each signing equation is a direct linear equation in `s_i` — one session is sufficient to solve for the share.
-- **Impact**: Recovery of the share for operator `i` without direct access to the operator's secure storage, leveraging the coordinator or network-layer access.
+- **Attack**: Each partial signature `z_i` is a linear function of the secret share `s_i`. Across multiple sessions, the attacker collects `(z_i, c, lambda_i, nonce_commitment)` tuples. While FROST's per-request nonce generation means these equations are not directly solvable (each uses a fresh nonce, adding a new unknown), an attacker with compromised operator infrastructure could record the nonce scalars `(d_i, e_i)` at generation time. With those nonces in hand, each signing equation is a direct linear equation in `s_i` — one session is sufficient to solve for the share.
+- **Impact**: Recovery of the share for operator `i` without direct access to the operator's secure storage, leveraging network-layer access or compromised operator infrastructure.
 - **Current mitigation**: Nonces are deleted immediately after use per RFC 9591. Each partial signature uses fresh random nonces, so without knowing the nonce scalars an observer cannot recover the share from the partial signature alone.
 - **Gap / Recommendation**: The spec does not specify nonce deletion guarantees. Operators must explicitly zero nonce scalars `(d_i, e_i)` from memory after the partial signature is computed, before any network transmission. This must be a requirement in the threshold-signing spec with a corresponding test that verifies nonces are not recoverable from operator memory after a signing round. Additionally, partial signatures must not be logged in plaintext by the coordinator — only aggregated output should be retained.
 - **Severity**: High
@@ -103,12 +103,12 @@ graph LR
 ### T-005: VRF Seed Bias or Grinding to Control Operator Sampling
 
 - **Category**: Cryptographic
-- **Attacker**: Attacker with influence over VRF input seed (e.g., block proposer, coordinator operator)
-- **Prerequisite**: Ability to influence the on-chain VRF seed — either via block timestamp manipulation (if seed is timestamp-based), via coordinator control, or via reorgs
-- **Attack**: If the VRF seed is derived from a manipulable source (block hash, timestamp, or a coordinator-supplied value), an attacker can grind values until the VRF output maps to an operator set that is predominantly under their control. Even with a 2/3 threshold, if the attacker controls 7 of 10 sampled operators, they can forge a signature for that session. With a block proposer on Ethereum PoS, the proposer can withhold a block and try again to bias the seed.
+- **Attacker**: Block proposer or attacker with influence over the `initSession` block
+- **Prerequisite**: Ability to influence the on-chain VRF seed — either via block proposer slot manipulation or via reorgs
+- **Attack**: If the VRF seed could be biased by the block proposer (controlling `block.prevrandao`), an attacker can grind nonces until the VRF output maps to an operator set that is predominantly under their control. Even with a 2/3 threshold, if the attacker controls 7 of 10 sampled operators, they can forge a signature for that session. With a block proposer on Ethereum PoS, the proposer can withhold a block and try again to bias the seed.
 - **Impact**: Attacker can selectively forge signatures for specific sessions where their operator set is sampled, without needing to control more than K operators globally.
-- **Current mitigation**: Per-session VRF operator sampling is described in the design and verification flow. The VRF is described as "on-chain" but the exact seed construction is not specified.
-- **Gap / Recommendation**: The VRF seed must be derived from an unpredictable, unmanipulable source: use the EIP-4844 RANDAO mix or a commit-reveal scheme where the session nonce (submitted by the verifier) is combined with the block hash of the block *after* session creation. The coordinator must not supply any component of the VRF seed. The VRF output must be verifiable on-chain so any grinding is detectable. Document the exact seed construction formula in the on-chain-session spec.
+- **Current mitigation**: Per-session VRF operator sampling uses `keccak256(session_id || session.vrf_randao)` where `session.vrf_randao` is `block.prevrandao` from the `initSession` block — beacon-chain RANDAO randomness that is unpredictable before the block is produced. The VRF output is independently verifiable by any party from on-chain data. No external coordinator supplies any component of the seed.
+- **Gap / Recommendation**: The remaining window is block-proposer bias: a validator who is the block proposer for the `initSession` block can withhold the block and retry to bias `prevrandao`. This requires controlling a validator slot, which is economically constrained by the consensus layer's slashing rules. Consider requiring a 1-block delay before operators must acknowledge (the current 2-minute acknowledgment window provides a practical buffer). The per-operator concentration limit `N - K` further limits the damage if seed bias is achieved for a single session.
 - **Severity**: High
 
 ---
@@ -130,15 +130,15 @@ graph LR
 
 ---
 
-### T-007: Coordinator as Implicit Trust Anchor via Partial Signature Aggregation
+### T-007: Agent Machine as Implicit Trust Anchor via Partial Signature Aggregation
 
 - **Category**: Key Material
-- **Attacker**: Attacker who fully compromises the AVS Coordinator service
-- **Prerequisite**: Full control of the coordinator process, including all network traffic it routes
-- **Attack**: The coordinator collects partial signatures from K operators and aggregates them into the final Ed25519 signature. A compromised coordinator sees all K partial signatures `{z_1, ..., z_K}` for the same message and the corresponding nonce commitments. As analyzed in T-004, with nonce scalars known at the operator, the partial signatures alone are linear equations in the shares. However, even without nonce scalars, if the coordinator can trigger the same K operators to sign two different messages (by routing different messages to different operators while forging the session context), and those operators reuse nonces, the coordinator recovers shares per T-001. Additionally, the coordinator can substitute the message being signed (see T-013).
-- **Impact**: A compromised coordinator is the most powerful single-point attack — it can attempt share recovery via nonce correlation, forge signing requests, and silently substitute messages. It does not directly reconstruct the key from partial sigs in the honest-nonce case, but its position makes it a high-value target.
-- **Current mitigation**: The bootstrap design states "a compromised coordinator can stall the ceremony but cannot forge keys or shares." The coordinator does not hold any key material. Operators verify session existence on-chain before signing.
-- **Gap / Recommendation**: The threat is understated in the design. The coordinator's blast radius should be reduced: (1) operators should verify the message hash included in their signing request against the on-chain session's challenge binding (if the challenge is committed on-chain at session creation), preventing message substitution; (2) the coordinator should be designed as a stateless relay — it should not buffer partial signatures longer than necessary; (3) consider running the coordinator as a multi-party computation or replicated service behind a consensus layer, removing the single point of trust. The "coordinator as router, not trust anchor" claim requires stronger enforcement than current specs provide.
+- **Attacker**: Attacker who fully compromises the agent machine (hashid-cli process)
+- **Prerequisite**: Full control of the agent process and its network traffic
+- **Attack**: The agent is the FROST coordinator for its own signing sessions — it contacts operators directly, collects partial signatures, and aggregates them. A compromised agent sees all K partial signatures `{z_1, ..., z_K}` for the same message and the corresponding nonce commitments. As analyzed in T-004, with nonce scalars known at the operator, the partial signatures alone are linear equations in the shares. Additionally, the agent can substitute the message being signed (see T-013).
+- **Impact**: A compromised agent machine is the most powerful single-point attack — it can attempt share recovery via nonce correlation, forge signing requests, and silently substitute messages. It does not directly reconstruct the key from partial sigs in the honest-nonce case, but its position makes it a high-value target.
+- **Current mitigation**: The challenge pre-commitment scheme (H-3) requires the verifier to commit `challenge_hashes: bytes32[5]` on-chain at `initSession`. Operators verify that the message they are asked to sign matches the committed challenge hashes before generating nonce material. This prevents a compromised agent from routing arbitrary messages to operators — any substitution is detectable and rejected. Operators verify session existence on-chain before signing. The agent does not hold any FROST key shares.
+- **Gap / Recommendation**: The control key (held by the agent machine) remains a single point of trust for authorizing signing requests. If the control key is stolen, the attacker can issue valid auth tokens. Rate limiting (60 requests/hour per agent) bounds the damage window. Standalone control key rotation (commit-reveal + K-of-N endorsement) provides recovery. The two-factor design — K-of-N operator shares AND agent control key — means neither factor alone is sufficient.
 - **Severity**: High
 
 ---
@@ -164,7 +164,7 @@ graph LR
 - **Attack**: If operator identity is not distinct and independently verified, one entity registers N operator nodes with distinct keys. During DKG, all N shares are distributed to effectively one controller. Any K of those shares yield the group private key.
 - **Impact**: The K-of-N threshold provides no protection. One entity can forge signatures immediately after DKG.
 - **Current mitigation**: EigenLayer operator registration requires staked ETH — a Sybil creates economic cost. The design references "EigenLayer's full active operator set" as the genesis set, implying existing independently-operated nodes.
-- **Gap / Recommendation**: The AVS contract must enforce a maximum share concentration limit — no single Ethereum address or verifiably linked address set may hold more than floor(K-1)/N of the total operator seats. This requires an on-chain diversity check at DKG time. Additionally, operators should be required to demonstrate distinct infrastructure attestations (e.g., distinct IP ranges, distinct hardware attestation). The genesis operator selection should be documented with explicit diversity criteria.
+- **Gap / Recommendation**: The AVS contract enforces a maximum concentration limit — no single Ethereum address may control more than `N - K` of the total operator seats. This is checked on-chain at `DKGInit` time using the operator's registered withdrawal address, signing key, and known delegation relationships. Operators should also demonstrate distinct infrastructure attestations (e.g., distinct IP ranges). The genesis operator selection should be documented with explicit diversity criteria.
 - **Severity**: High
 
 ---
@@ -205,35 +205,35 @@ graph LR
 - **Attacker**: Attacker with minimal capital (enough to register as a verifier and post the minimum bond)
 - **Prerequisite**: On-chain registration as a verifier with a minimum bond; ability to issue automated `initSession` calls
 - **Attack**: A registered verifier fills all 10 of their permitted open sessions with requests for a target agent, then never submits valid signatures, holding the sessions open for the full 30-minute expiry window. If the attacker registers many verifier identities (each requiring only the minimum bond), they can open 10 x M sessions across M identities, exhausting the on-chain state and forcing operators to evaluate session validity for all of them on every signing request. This increases coordinator lookup load and can push legitimate sessions out of the expiry window.
-- **Impact**: Denial-of-service against specific agents; increased on-chain storage costs; coordinator performance degradation.
+- **Impact**: Denial-of-service against specific agents; increased on-chain storage costs; operator workload from evaluating spurious session requests.
 - **Current mitigation**: Per-verifier rate limit of 10 open sessions enforced by `SessionRegistry`. Verifier bond requirement raises the economic cost of registration.
 - **Gap / Recommendation**: The bond amount must be set high enough that opening 10 sessions x M verifiers is economically costly relative to the disruption caused. Bond should be slashable on evidence of session abuse (opening sessions that are never spent or consistently expire). Rate limiting should also apply per `(verifier, agent)` pair to prevent targeted agent exhaustion. Consider a per-session fee (burned or distributed to operators) that makes session spam economically irrational.
 - **Severity**: Medium
 
 ---
 
-### T-013: Coordinator MITM Substituting the Message Being Signed
+### T-013: Agent Machine Message Substitution
 
 - **Category**: Session Layer
-- **Attacker**: Compromised AVS coordinator
-- **Prerequisite**: Full control of the coordinator process and its network traffic
-- **Attack**: The coordinator receives a signing request `{ message: sha256(challenge || session_id), session_id }` from the agent. It routes the request to operators but substitutes the message with an attacker-controlled payload `m'`. Operators verify only that `session_id` is open on-chain, not that the message matches any on-chain commitment. They produce partial signatures over `m'`, which the coordinator aggregates into a valid Ed25519 signature over a message the agent never intended to sign.
-- **Impact**: The compromised coordinator can coerce the operator set into signing arbitrary content — including forged verification responses or attacker-controlled identity records — under the agent's key.
-- **Current mitigation**: The agent verifies the assembled signature locally before returning it to the verifier (`ed25519.verify(sig, sha256(challenge || session_id), threshold_pubkey)`). This detects substitution after the fact and causes the agent to discard the signature. However, the operator set is not protected from being used to produce the forged signature.
-- **Gap / Recommendation**: At session creation time, the verifier should commit the set of challenge hashes on-chain as part of the session record (`initSession` should accept `challenge_commitments: bytes32[]`). Operators then verify that the message they are asked to sign is one of the committed challenge hashes before producing a partial signature. This binds the coordinator's routing to verifier-committed messages, preventing substitution even by a fully compromised coordinator. This is a protocol-level change with significant security value.
+- **Attacker**: Compromised agent machine (hashid-cli process)
+- **Prerequisite**: Full control of the agent process and its network traffic
+- **Attack**: Because the agent is the FROST coordinator for its own signing sessions, a compromised agent machine could substitute the challenge with an attacker-controlled payload `m'` before routing it to operators. Without an on-chain commitment, operators verify only that `session_id` is open on-chain, not that the message matches what the verifier intended. They produce partial signatures over `m'`, which the agent aggregates into a valid Ed25519 signature over a message the verifier never committed to.
+- **Impact**: The compromised agent can coerce the operator set into signing arbitrary content under the agent's key, as long as it can present a valid open session.
+- **Current mitigation**: The challenge pre-commitment scheme is implemented: `initSession` accepts `challenge_hashes: bytes32[5]`. Operators verify `keccak256(raw_challenge) ∈ session.challenge_hashes` and `sha256(raw_challenge || session_id) == message` before generating any nonce material. Any substitution causes operator rejection before nonce commitments are produced. The agent also verifies the assembled signature locally before returning it to the verifier.
+- **Gap / Recommendation**: The current spec fully addresses this threat. Operator rejection receipts provide audit evidence when a compromised agent attempts substitution. The two-factor requirement (operator participation + control key) means a compromised agent machine that does not also have the control key cannot produce valid auth tokens for new signing sessions.
 - **Severity**: High
 
 ---
 
-### T-014: Challenge Prediction via Public Genesis Corpus Pre-computation
+### T-014: Challenge Pre-computation After Key Recovery
 
 - **Category**: Session Layer
-- **Attacker**: Attacker who has obtained a key share (K-1 shares, insufficient alone) plus foreknowledge of challenges
-- **Prerequisite**: The genesis corpus is public and fixed; attacker has K-1 key shares and foreknowledge of the challenge set
-- **Attack**: Because challenges are drawn from the public genesis corpus (noted as public in the design's non-goals: "Confidential challenge content is a non-goal"), an attacker who has pre-computed valid signatures for every element of the corpus for a given key can present pre-computed answers. However, this requires already having the full group key — so the threat model here is about *eliminating* the need for live operator participation once the key is recovered. With a known, bounded challenge space, a key recovery attack immediately yields the ability to answer all future challenges offline.
-- **Impact**: If the key is recovered (via T-001, T-006, or T-008), the public challenge set means no live interaction with operators is needed — all future verifications can be answered instantly from a pre-computed table.
-- **Current mitigation**: The `session_id` is bound into each signed message (`sha256(challenge || session_id)`), meaning signatures are session-specific and cannot be replayed across sessions.
-- **Gap / Recommendation**: The session binding via `session_id` effectively makes this a non-issue for replay, but it does not prevent an attacker with the key from answering any future session. This is an accepted risk given the non-goal of challenge confidentiality. However, if the challenge space is small (e.g., a fixed corpus of N items), consider rotating the corpus periodically and keeping the next corpus confidential until session creation, raising the bar for pre-computation.
+- **Attacker**: Attacker who has recovered the full group private key (via T-001, T-006, or T-008)
+- **Prerequisite**: Full group private key in hand
+- **Attack**: Challenges are arbitrary verifier-chosen strings. There is no fixed corpus. However, an attacker who has recovered the full group private key can answer any future challenge set without operator participation by computing `sign(sha256(challenge || session_id), group_privkey)` directly.
+- **Impact**: If the key is recovered, no live interaction with operators is needed for future verifications — the attacker can answer any session instantly.
+- **Current mitigation**: The `session_id` is bound into each signed message, meaning signatures are session-specific and cannot be replayed across sessions. The verifier chooses fresh arbitrary challenges per session, preventing pre-computation of a static table. Key recovery itself requires compromising K-of-N operator shares simultaneously.
+- **Gap / Recommendation**: The session binding prevents replay. The protection against pre-computation is the key custody guarantee — if K shares are compromised, key rotation (succession) is the appropriate response. Proactive resharing limits the window of any single share's exposure.
 - **Severity**: Low
 
 ---
@@ -243,7 +243,7 @@ graph LR
 - **Category**: Session Layer
 - **Attacker**: Passive observer or network attacker
 - **Prerequisite**: Ability to observe historical session IDs and identify the generation pattern
-- **Attack**: If `session_id` is generated deterministically from inputs observable to an attacker (e.g., sequential counter, block number, or a hash of public inputs like `(verifier_pubkey, agent_pubkey, nonce)` where the nonce is predictable), the attacker can enumerate valid session IDs and probe the coordinator or on-chain state for open sessions. This can be combined with T-013 (coordinator MITM) to intercept specific sessions or to monitor which agents are being verified at what times.
+- **Attack**: If `session_id` is generated deterministically from inputs observable to an attacker (e.g., sequential counter, block number, or a hash of public inputs like `(verifier_pubkey, agent_pubkey, nonce)` where the nonce is predictable), the attacker can enumerate valid session IDs and probe on-chain state for open sessions. This can be combined with T-013 (agent-machine message substitution) to intercept specific sessions or to monitor which agents are being verified at what times.
 - **Impact**: Privacy leak of agent verification activity; enables targeted attacks against specific open sessions.
 - **Current mitigation**: Session IDs are returned by `initSession` and are presumably derived from a hash of inputs. The nonce is caller-provided, adding entropy.
 - **Gap / Recommendation**: `session_id` must be derived as `keccak256(verifier_pubkey || agent_pubkey || nonce || block_hash)` where `block_hash` is the hash of the block containing the `initSession` transaction. This makes session IDs unpredictable to observers watching the mempool but verifiable on-chain. Document the exact session ID derivation formula in the on-chain-session spec.
@@ -332,21 +332,21 @@ graph LR
 - **Attack**: Once the VRF seed for a session is revealed (either by the on-chain block or the coordinator), an attacker who knows the sampling algorithm can compute exactly which K operators will be selected. The attacker then DDoSes those K operators before they can respond within the 5-minute window. With all K operators unreachable, the signing request expires and the agent must retry. If the VRF seed is predictable (see T-005) or the attacker has advance knowledge of seeds, they can do this for every session.
 - **Impact**: Indefinite denial-of-service against a specific agent's ability to produce signatures.
 - **Current mitigation**: The design acknowledges this: "random per-session sampling means the attacker must compromise a supermajority of the full operator set simultaneously." The 5-minute window allows retry with a fresh VRF sample.
-- **Gap / Recommendation**: The mitigation is only effective if the operator IPs are not all publicly discoverable. Operators should not publish their IPs in their EigenLayer registration metadata — routing should go through the coordinator which maintains a private IP map. Additionally, operator endpoints should be protected behind DDoS-mitigation infrastructure (e.g., Cloudflare, AWS Shield). The coordinator should have access to the full operator set and automatically resample on timeout without requiring a full session restart, within the 5-minute window.
+- **Gap / Recommendation**: The mitigation is only effective if operator IPs are not all publicly discoverable. Operators register public HTTPS endpoint URLs in the on-chain registry — these are necessarily public. Operator endpoints should therefore be protected behind DDoS-mitigation infrastructure (e.g., Cloudflare, AWS Shield). The agent automatically resamples a new operator set on signing request timeout without requiring a full session restart, within the 5-minute signing window.
 - **Severity**: Medium
 
 ---
 
-### T-022: AVS Coordinator Single Point of Failure
+### T-022: Agent Machine Unavailability Blocking Signing
 
 - **Category**: Infrastructure / Availability
-- **Attacker**: DoS attacker or infrastructure failure
-- **Prerequisite**: Ability to make the coordinator service unavailable (DDoS, BGP hijack, data center failure)
-- **Attack**: The coordinator is the only party that routes signing requests between the agent and operators, collects partial signatures, and performs aggregation. If the coordinator is unreachable, no signing is possible regardless of operator availability. The design explicitly acknowledges this as a risk.
-- **Impact**: Complete loss of signing capability. All active sessions expire. Agents cannot be verified.
-- **Current mitigation**: Acknowledged in the design as a risk. No mitigation specified.
-- **Gap / Recommendation**: The coordinator must be operated as a replicated, active-active service across at least 3 availability zones. Its API surface must be fronted by a load balancer with health checks. State (in-progress signing sessions, nonce commitment logs) must be replicated — coordinator processes must be stateless with shared state in a distributed store (e.g., Redis Cluster). Long-term, the coordinator function should be decentralized — e.g., implemented as a protocol-level BLS-aggregated multisig on EigenLayer itself.
-- **Severity**: High
+- **Attacker**: DoS attacker or infrastructure failure targeting the agent machine
+- **Prerequisite**: Ability to make the agent process (hashid-cli) unavailable
+- **Attack**: The agent machine is the coordination point for signing — it contacts operators directly, collects partial signatures, and aggregates them. If the agent machine is unreachable or crashed, no signing sessions can be initiated or completed regardless of operator availability.
+- **Impact**: Loss of signing capability while the agent is down. Active sessions may expire if the agent is offline during the signing window.
+- **Current mitigation**: Unlike a centralized coordinator service, there is no shared coordination state to replicate — the agent is simply the client process. The agent can be restarted and will re-read operator endpoints from the on-chain registry. Any incomplete sessions can be retried.
+- **Gap / Recommendation**: Operators with high availability requirements should run the agent process in a supervised environment (systemd, Kubernetes) with automatic restart. Since the agent holds no key material and reads operator endpoints from the chain, restart is fast and stateless. The primary availability concern is the agent machine's control key storage — if the machine hosting the control key is permanently lost, standalone control key rotation via K-of-N endorsement is the recovery path.
+- **Severity**: Medium
 
 ---
 
@@ -454,10 +454,10 @@ graph LR
 - **Category**: Supply Chain
 - **Attacker**: Attacker who has compromised the EigenLayer AVS SDK package
 - **Prerequisite**: Ability to publish a malicious version of the EigenLayer AVS SDK; or ability to MITM the SDK's network calls if endpoints are not pinned
-- **Attack**: A malicious AVS SDK version replaces operator endpoint URLs with attacker-controlled servers. Signing requests (including `message`, `session_id`, and any key material in transit) are routed to the attacker. Partial signatures are collected by the attacker instead of the coordinator. Additionally, the SDK could exfiltrate the agent's local state or forge coordinator responses.
+- **Attack**: A malicious AVS SDK version replaces operator endpoint URLs with attacker-controlled servers. Signing requests (including `message`, `session_id`, and any key material in transit) are routed to the attacker. Partial signatures are collected by the attacker instead of the agent. Additionally, the SDK could exfiltrate the agent's local state or forge operator responses.
 - **Impact**: Complete control of the signing flow. The attacker receives all signing requests and partial signatures, enabling T-004. Agent receives forged (attacker-assembled) signatures.
-- **Current mitigation**: Operators verify session existence on-chain independently of the coordinator. This provides a partial check but does not protect against a malicious SDK that routes correctly to operators but exfiltrates data.
-- **Gap / Recommendation**: Pin the EigenLayer AVS SDK version in the lockfile. All coordinator and operator endpoints must be configured explicitly by the operator — the SDK must not have the ability to override or discover endpoints dynamically from an untrusted source. TLS certificate pinning for coordinator and operator communication should be enforced. The SDK's network calls should be audited for any telemetry, analytics, or callback URLs that could exfiltrate request data.
+- **Current mitigation**: Operators verify session existence on-chain independently. This provides a partial check but does not protect against a malicious SDK that routes correctly to operators but exfiltrates data.
+- **Gap / Recommendation**: Pin the EigenLayer AVS SDK version in the lockfile. Operator endpoints are read from the on-chain registry by the agent — the SDK must not have the ability to override or substitute these endpoints from an untrusted source. TLS certificate verification for all operator communication should be enforced. The SDK's network calls should be audited for any telemetry, analytics, or callback URLs that could exfiltrate request data.
 - **Severity**: High
 
 ---
@@ -483,15 +483,15 @@ graph LR
 | T-029 | Compromised @noble/curves | Critical | Medium | 2 |
 | T-002 | Rogue key attack during DKG | Critical | Low | 3 |
 | T-006 | Operator infrastructure breach exfiltrating key share | Critical | Medium | 4 |
-| T-013 | Coordinator MITM substituting signed message | High | Medium | 5 |
-| T-007 | Coordinator as implicit trust anchor | High | Medium | 6 |
+| T-013 | Agent-machine message substitution | High | Medium | 5 |
+| T-007 | Agent machine as implicit trust anchor | High | Medium | 6 |
 | T-008 | Targeted K-operator collusion | High | Low | 7 |
 | T-009 | Sybil operator registration | High | Low | 8 |
 | T-010 | Share persistence after resharing | High | Medium | 9 |
 | T-016 | Reentrancy in SessionRegistry.spend | High | Low | 10 |
 | T-017 | AnchorIdentity frontrunning | High | Low | 11 |
 | T-018 | Succession chain injection | High | Low | 12 |
-| T-022 | Coordinator single point of failure | High | High | 13 |
+| T-022 | Agent machine unavailability blocking signing | Medium | Medium | 13 |
 | T-024 | Resharing epoch availability attack | High | Low | 14 |
 | T-026 | Succession chain frontrunning | High | Low | 15 |
 | T-030 | Compromised EigenLayer AVS SDK | High | Medium | 16 |
@@ -517,19 +517,19 @@ graph LR
 
 **1. Enforce FROST nonce handling per RFC 9591 with on-chain slashable evidence (addresses T-001, T-004)**
 
-Nonce reuse is the highest-severity, medium-likelihood attack in the system. Two defenses must be implemented in combination. First, operators must use deterministic nonce derivation as specified in RFC 9591 Appendix B: derive `(d, e)` as `HMAC-SHA512(secret_share, context || message)` where `context` is a domain separator and `message` is the signing request. This makes nonce reuse structurally impossible for different messages — two signing requests with different messages produce different nonces even if the CSPRNG fails. Second, the AVS contract must accept nonce reuse proofs as a slashable condition from day one: if an operator submits two partial signatures `(z_i, nonce_commitment)` and `(z_i', nonce_commitment)` with identical nonce commitments but different messages, any party can submit both on-chain to trigger an automatic slash. The coordinator must log nonce commitments per operator and surface this proof automatically. This is not a deferred "expanded slashing condition" — it is a correctness requirement for the protocol's core security claim.
+Nonce reuse is the highest-severity, medium-likelihood attack in the system. Two defenses are implemented in combination. First, operators use the RFC 9591 hybrid HKDF-SHA-512 nonce derivation scheme with a fresh random salt per request, making nonce reuse structurally impossible for different sessions or messages even if the CSPRNG fails. Second, the AVS contract exposes `slashNonceReuse(operator_id, signed_commitment_a, signed_commitment_b)` — a lazy fraud proof requiring only two operator-signed nonce commitments with identical `(D_i, E_i)` values and valid AVS key signatures. No Merkle proofs, no on-chain log publication. The agent archives signed nonce commitments to EigenDA after each signing round and can surface this proof automatically if reuse is detected. This is a correctness requirement for the protocol's core security claim, not a deferred slashing condition.
 
 **2. Pin all cryptographic dependencies with hash verification and isolate operator signing processes (addresses T-029, T-030, T-031)**
 
 The system's security rests entirely on `@noble/curves` producing correct, unbiased nonces and partial signatures. A single malicious npm publish silently undermines the entire FROST protocol. All cryptographic dependencies (`@noble/curves`, EigenLayer AVS SDK, EigenDA client) must be locked to exact SHAs in `pnpm-lock.yaml` with `pnpm install --frozen-lockfile` enforced in CI and operator deployments. Operators must deploy from a reproducible, hash-verified Docker image — never from live `npm install`. The key share storage and signing path must be isolated in a dedicated subprocess with no additional npm dependencies beyond the pinned cryptographic library, running with a seccomp profile that blocks all syscalls except the necessary ones. Upstream updates to `@noble/curves` require an explicit security review gate before the lockfile is updated.
 
-**3. Bind coordinator-routed messages to on-chain session commitments (addresses T-013, T-007)**
+**3. Bind agent-routed messages to on-chain session commitments (addresses T-013, T-007)**
 
-The coordinator is the single most dangerous internal component — it sees every signing request, routes them to operators, and aggregates results. The current design provides no mechanism for operators to verify that the message they are asked to sign is the message the verifier intended. This must be fixed at the protocol level: when a verifier calls `initSession`, it should also commit a Merkle root of the challenge hashes (`initSession(agent_pubkey, nonce, verifier_pubkey, challenge_root)`). Operators must verify that the message hash in each signing request is a leaf of the committed challenge root before producing a partial signature. This check is a single on-chain read that makes coordinator message substitution detectable and rejectable by every honest operator, removing the coordinator's ability to coerce operators into signing attacker-chosen content.
+The agent machine is the coordination point for signing — it routes requests to operators and aggregates partial signatures. Because the agent contacts operators directly, a compromised agent machine could substitute challenge payloads. This is addressed at the protocol level: `initSession` accepts `challenge_hashes: bytes32[5]` and the `SessionRecord` stores them on-chain. Operators verify that the message hash in each signing request matches a committed challenge hash before generating any nonce material. This check is a single on-chain read that makes agent-side message substitution detectable and rejectable by every honest operator. At N=5 challenges, a flat array costs marginally more gas than a Merkle root but eliminates the per-challenge proof overhead on every signing request.
 
 **4. Require proof-of-knowledge for DKG commitments to prevent rogue key attacks (addresses T-002, T-003)**
 
-RFC 9591 Section 5.2.2 requires each participant in the DKG to provide a Schnorr proof-of-knowledge over their commitment constant term `C_i[0]`. This proof demonstrates that the operator knows the discrete log of its contribution, preventing it from setting `C_i[0]` to cancel other operators' contributions (rogue key attack). The current frost-dkg spec describes Feldman VSS commitments but does not explicitly require this proof. It must be added as an explicit requirement: operators must produce and broadcast `pi_i = (R_i, mu_i)` where `mu_i = k_i + H(i, ctx, C_i[0], R_i) * a_{i,0}` per RFC 9591 Section 5.2.2 before any other operator proceeds to Round 2. The coordinator must verify all proofs before relaying commitments. This requirement must be present in the DKG spec and verified in the AVS contract's DKG registration logic.
+RFC 9591 Section 5.2.2 requires each participant in the DKG to provide a Schnorr proof-of-knowledge over their commitment constant term `C_i[0]`. This proof demonstrates that the operator knows the discrete log of its contribution, preventing it from setting `C_i[0]` to cancel other operators' contributions (rogue key attack). The frost-dkg spec requires operators to produce and broadcast `σ_i = (R_i, μ_i)` per the exact FROST formulas before any operator proceeds to Round 2. Each operator independently verifies all N-1 received proofs before computing or sending any Round 2 shares — this is the primary control. The agent also verifies before relaying as defence in depth. This requirement is present in the DKG spec and must be audited in the TypeScript DKG implementation.
 
 **5. Implement commit-reveal for succession entries and add on-chain time-lock (addresses T-026, T-018)**
 

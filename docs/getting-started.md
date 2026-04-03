@@ -23,15 +23,16 @@ In HashID, these "bank managers" are EigenLayer AVS operators — independent pa
 There's a second layer too: the agent itself holds a separate single-party key called a **control key**. Operators won't produce a signature unless the agent actively authorizes the request with this key. So even if enough operators were somehow colluding, they still can't sign anything without the agent's participation. Neither side can act alone.
 
 ```
-Your Agent
+Your Agent (hashid-cli)
    │
-   │  "Please sign this"
-   ▼
-Coordinator ──── randomly picks 7 of 10 operators ────▶ Operator A ─┐
-                                                       Operator B ─┤
-                                                       Operator C ─┤── each contributes
-                                                       ...         ─┤   a partial signature
-                                                       Operator G ─┘
+   │  reads operator registry on-chain
+   │  randomly picks 7 of 10 operators
+   │  contacts each directly
+   ├──────────────────────────────────▶ Operator A ─┐
+   ├──────────────────────────────────▶ Operator B ─┤
+   ├──────────────────────────────────▶ Operator C ─┤── each contributes
+   │                                   ...         ─┤   a partial signature
+   └──────────────────────────────────▶ Operator G ─┘
                            combines them into one valid signature
                                         │
                                         ▼
