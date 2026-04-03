@@ -46,11 +46,21 @@ Before contributing a partial signature, an operator SHALL verify that `(agent_p
 - **THEN** the operator refuses to produce a partial signature
 
 ### Requirement: Session spending
-The `SessionRegistry` contract SHALL atomically mark a session as `SPENT` when the final assembled signature is submitted on-chain by the session's registered verifier. Only `session.verifier_address` MAY call `spendSession`; calls from any other address SHALL revert.
+The `SessionRegistry` contract SHALL atomically mark a session as `SPENT` when the final assembled signatures are submitted on-chain by the session's registered verifier via `spendSession(session_id, signatures[5])`. Only `session.verifier_address` MAY call `spendSession`; calls from any other address SHALL revert.
 
-#### Scenario: Session is spent after successful signing
-- **WHEN** the assembled Ed25519 signature is submitted to the contract
+The contract SHALL enforce that `signatures` contains exactly 5 entries — one per committed challenge hash. For each index `i`, the contract SHALL verify `ed25519.verify(signatures[i], sha256(session.challenge_hashes[i] || session_id), session.agent_pubkey)` resolves to the agent's registered `group_pubkey`. If any of the 5 verifications fails, or if fewer than 5 signatures are supplied, the contract SHALL revert with a signature-verification-failed error and the session SHALL remain OPEN.
+
+#### Scenario: Session is spent after all 5 signatures verify
+- **WHEN** `spendSession` is called with exactly 5 valid Ed25519 signatures, each verifying against the corresponding committed challenge hash
 - **THEN** the session status changes to `SPENT` and cannot be used again
+
+#### Scenario: Fewer than 5 signatures causes revert
+- **WHEN** `spendSession` is called with an array of fewer than 5 signatures
+- **THEN** the contract reverts with a signature-count-mismatch error; the session remains OPEN
+
+#### Scenario: Any invalid signature causes revert
+- **WHEN** `spendSession` is called with 5 entries but one or more signatures fail Ed25519 verification against the committed challenge hashes
+- **THEN** the contract reverts with a signature-verification-failed error; the session remains OPEN
 
 #### Scenario: Double-spend is rejected
 - **WHEN** a second signature is submitted for an already-spent session

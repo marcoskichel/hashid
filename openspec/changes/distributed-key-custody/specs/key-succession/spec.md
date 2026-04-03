@@ -125,6 +125,10 @@ If a guardian address is registered on the agent's identity record, the guardian
 - **WHEN** an address that is not the registered guardian calls `vetoSuccession`
 - **THEN** the contract reverts with an unauthorized error
 
+#### Scenario: Expired guardian veto is rejected at call time
+- **WHEN** `vetoSuccession` is called by the registered guardian address but the guardian's 6-month term has elapsed
+- **THEN** the contract reverts with a guardian-term-expired error; the pending commitment is NOT cancelled and the succession proceeds normally through the 24-hour timelock
+
 #### Scenario: Veto after reveal has no effect
 - **WHEN** `vetoSuccession` is called after `revealSuccession` has already been confirmed
 - **THEN** the contract reverts with a no-pending-commitment error
