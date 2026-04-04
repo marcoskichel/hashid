@@ -391,6 +391,117 @@ The following `AnchorIdentity` / `SessionRegistry` changes are required across H
 | `AnchorIdentity` | Add `vetoSuccession(agent_id)` callable by registered guardian | H-4 |
 | `AnchorIdentity` | Add rate limit: 1h between succession entries, max 100 per agent | H-4 (T-027) |
 | `AnchorIdentity` | Ed25519 verification on-chain in `reveal` (abstracted for precompile upgrade) | H-4 |
+| AVS operator registry | Add `x25519_pubkey: bytes32` + `x25519_pop: bytes64` with PoP verification | H-6 |
+| AVS operator registry | `DKGInit` pre-check reverts if any operator missing `x25519_pubkey` | H-6 |
+| `AnchorIdentity` | `AnchorIdentity` reverts if `group_pubkey` equals the identity point | H-6 |
+| AVS contract | Add `slashBadShare(operator_id, wire_payload, sig, decrypted_share, recipient_index)` | H-6 |
+
+All contracts should use Solidity 0.8+, OZ `ReentrancyGuard` on all state-mutating paths, OZ `Pausable` for emergency freeze, and Foundry invariant tests asserting session counter bounds and succession chain monotonicity.
+
+---
+
+## H-6: Round 2 Share Encryption and Sender Accountability
+
+**Threats addressed:** A5 (undefined share encryption → silent interop failure), ephemeral key framing attack, identity-point group key, bad-share accountability gap
+
+### Problem
+
+The `frost-dkg` spec describes Round 2 share distribution as "encrypt to the recipient's public key" with no further detail. This creates three compounding issues:
+
+**1. Silent interoperability failure.** Ed25519 is a signing key, not a KEM key. Independent implementations will choose different conversion strategies (`ed25519_pk_to_x25519`, raw scalar, `libsodium crypto_box`) and produce incompatible ciphertexts. The ceremony aborts as a liveness timeout with no detectable error at the protocol layer.
+
+**2. Ephemeral key framing attack.** Without covering the ephemeral public key in the sender's authentication signature, an attacker intercepting a Round 2 wire message can substitute their own ephemeral key. AEAD decryption fails at the receiver, but the original operator's signature still verifies — manufacturing cryptographic evidence that an honest operator sent an undecryptable share. This can frame an honest operator for a ceremony abort.
+
+**3. Bad-share accountability gap.** The spec implied bad shares are slashable on-chain. They are not: the on-chain contract can verify an Ed25519 signature over a ciphertext but cannot verify the decrypted plaintext is a valid FROST share without the recipient's private key. The accountability claim was partially fictional.
+
+**4. Key hygiene debt.** Using `ed25519_pk_to_x25519` reuses the same underlying scalar in two algebraic contexts (Edwards for signing, Montgomery for DH). This is considered bad key hygiene with known theoretical cross-protocol risks.
+
+### Solution
+
+**FROST-SHARE-ECIES-v1 — fully specified encryption scheme**
+
+```
+// Sender (operator i → operator j)
+ephemeral_sk  ← random_scalar()    // MUST be regenerated on every transmission, including retries
+ephemeral_pk  ← X25519(ephemeral_sk, G)
+shared_secret ← X25519(ephemeral_sk, operator_j.x25519_pubkey)
+
+prk     ← HKDF-Extract(salt=SHA-256(session_id), ikm=shared_secret)
+enc_key ← HKDF-Expand(prk,
+              info="frost-share-v1" || session_id || sender_index_u16be || recipient_index_u16be,
+              length=32)
+nonce   ← SHA-256(session_id || sender_index_u16be || recipient_index_u16be || 0x02)[0:12]
+
+wire_header = ephemeral_pk || sender_index_u16be || recipient_index_u16be
+ciphertext  ← ChaCha20-Poly1305-Seal(key=enc_key, nonce=nonce,
+                  pt=scalar_share_le32, aad=wire_header)
+
+// Sender authentication — MUST cover ephemeral_pk to prevent framing
+payload = wire_header || ciphertext    // 86 bytes
+sig     ← Ed25519-Sign(i.avs_ed25519_privkey, payload)
+send(payload || sig)
+```
+
+Wire format: `ephemeral_pk(32) || sender_index(2) || recipient_index(2) || ciphertext(48) || sig(64)` = 148 bytes.
+
+**Why ephemeral key regeneration is a cryptographic requirement (not hygiene):** The nonce is deterministic and session-scoped. Retransmitting with the same ephemeral key produces identical ECDH output → identical derived key → identical nonce → ChaCha20-Poly1305 nonce reuse. This leaks the XOR of plaintexts and voids the authentication tag entirely, making the Feldman VSS check the last line of defense. The spec mandates a new CSPRNG-derived ephemeral scalar on every transmission attempt.
+
+**Dedicated X25519 keys — separate from Ed25519 signing keys**
+
+Operators register a dedicated `x25519_pubkey` (32 bytes, u-coordinate, RFC 7748) alongside their AVS Ed25519 signing key in the on-chain operator registry. The keys use independent key material. A Proof of Possession binds them:
+
+```
+pop = Ed25519-Sign(avs_ed25519_privkey,
+    "x25519-pop-v1" || epoch_u64be || x25519_pubkey)
+```
+
+`DKGInit` hard-blocks if any operator in the proposed N-set lacks a registered `x25519_pubkey`. The registry snapshot used for a ceremony is taken at the `DKGInit` confirmation block and is immutable for that ceremony.
+
+**Two-tier accountability model**
+
+On-chain slashing (provable from public data): Round 1 PoK failures, nonce reuse, session non-acknowledgment, Phase 2 resharing non-confirmation.
+
+Off-chain dispute with on-chain Feldman VSS anchor: bad Round 2 shares. The recipient decrypts off-chain and submits `slashBadShare(operator_id, wire_payload, sig, decrypted_share, recipient_index)`. The contract verifies the Ed25519 signature (proves authorship) and checks `decrypted_share·G == Σ_k(C_i[k]·recipient_index^k)` against the sender's Round 1 Feldman VSS commitments (already on-chain). No private key is needed on-chain.
+
+**Identity-point group key rejection**
+
+`AnchorIdentity` reverts if `group_pubkey` equals the identity point (`0x01 00 ... 00`). An identity-point group key causes `ed25519.verify` behavior to be implementation-defined. This check is also enforced locally by each operator before reporting their derived key.
+
+**Spec changes required**
+
+In `frost-ecies-share-encryption/specs/frost-dkg/spec.md` (this change):
+- Replace "encrypt to recipient's public key" with full `FROST-SHARE-ECIES-v1` construction.
+- Add ephemeral key freshness as a cryptographic requirement.
+- Add identity-point rejection to group public key derivation requirement.
+- Add share index epoch-locality clarification.
+
+In `frost-ecies-share-encryption/specs/coordinator-accountability/spec.md` (this change):
+- Extend operator registry with `x25519_pubkey` and PoP.
+- Add `DKGInit` hard-block for missing X25519 keys.
+- Add X25519 rotation rules and snapshot semantics.
+- Add two-tier accountability model definition.
+- Add `slashBadShare` contract function.
+
+---
+
+## Cross-Cutting Contract Changes
+
+The following `AnchorIdentity` / `SessionRegistry` changes are required across H-3 and H-4:
+
+| Contract | Change | Hardening |
+|---|---|---|
+| `SessionRegistry.initSession` | Add `bytes32[5] challenge_hashes` parameter | H-3: challenge binding |
+| `SessionRegistry.SessionRecord` | Add `challengeHashes: bytes32[5]` field | H-3 |
+| `SessionRegistry` | Add `slashNonceReuse` with lazy signed-commitment verification | H-1 |
+| `AnchorIdentity` | Add `commit(bytes32 commitment_hash)` | H-4: commit-reveal |
+| `AnchorIdentity` | Add `reveal(agent_id, old_pubkey, new_pubkey, salt, sig)` with 24h timelock | H-4 |
+| `AnchorIdentity` | Add `vetoSuccession(agent_id)` callable by registered guardian | H-4 |
+| `AnchorIdentity` | Add rate limit: 1h between succession entries, max 100 per agent | H-4 (T-027) |
+| `AnchorIdentity` | Ed25519 verification on-chain in `reveal` (abstracted for precompile upgrade) | H-4 |
+| AVS operator registry | Add `x25519_pubkey: bytes32` + `x25519_pop: bytes64` with PoP verification | H-6 |
+| AVS operator registry | `DKGInit` pre-check reverts if any operator missing `x25519_pubkey` | H-6 |
+| `AnchorIdentity` | Revert if `group_pubkey` equals the identity point | H-6 |
+| AVS contract | Add `slashBadShare(operator_id, wire_payload, sig, decrypted_share, recipient_index)` | H-6 |
 
 All contracts should use Solidity 0.8+, OZ `ReentrancyGuard` on all state-mutating paths, OZ `Pausable` for emergency freeze, and Foundry invariant tests asserting session counter bounds and succession chain monotonicity.
 
@@ -401,7 +512,8 @@ All contracts should use Solidity 0.8+, OZ `ReentrancyGuard` on all state-mutati
 These hardening items should be sequenced into the `tasks.md` for `distributed-key-custody`:
 
 1. **H-2 (DKG PoK)** — purely a spec + TypeScript DKG implementation change. No contract changes. Blocks all security guarantees downstream. Implement first.
-2. **H-1 (Nonce safety)** — TypeScript operator implementation + AVS contract `slashNonceReuse`. Implement before any testnet signing.
-3. **H-3 (Coordinator binding)** — `initSession` contract change + operator Round 1 pre-check. Implement before testnet verification sessions.
-4. **H-4 (Succession commit-reveal)** — `AnchorIdentity` contract change. Implement before any succession ceremony is possible on testnet.
-5. **H-5 (Supply chain + isolation)** — Operator build pipeline and process architecture. Implement before inviting external operators.
+2. **H-6 (Share encryption)** — TypeScript DKG library change + operator registry contract extension. Implement before any testnet DKG ceremony — unspecified encryption means the ceremony cannot produce interoperable shares.
+3. **H-1 (Nonce safety)** — TypeScript operator implementation + AVS contract `slashNonceReuse`. Implement before any testnet signing.
+4. **H-3 (Coordinator binding)** — `initSession` contract change + operator Round 1 pre-check. Implement before testnet verification sessions.
+5. **H-4 (Succession commit-reveal)** — `AnchorIdentity` contract change. Implement before any succession ceremony is possible on testnet.
+6. **H-5 (Supply chain + isolation)** — Operator build pipeline and process architecture. Implement before inviting external operators.

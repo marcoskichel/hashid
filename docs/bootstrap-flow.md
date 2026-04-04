@@ -41,15 +41,21 @@ sequenceDiagram
         Note over Agent: Ceremony aborted — no Round 2 shares sent
     end
 
-    Note over Op1,OpN: Round 2 — Encrypted Share Exchange
-    Op1->>OpN: Encrypted share s1(j) for operator j
-    OpN->>Op1: Encrypted share sN(i) for operator i
-    Op1->>Op1: Decrypt received shares; verify against commitments
-    OpN->>OpN: Decrypt received shares; verify against commitments
+    Note over Op1,OpN: Round 2 — Encrypted Share Exchange (FROST-SHARE-ECIES-v1)
+    Note over Op1,OpN: Each share is encrypted to the recipient's registered x25519_pubkey
+    Note over Op1,OpN: Wire: ephemeral_pk(32) || sender_idx(2) || recipient_idx(2) || ciphertext(48) || ed25519_sig(64)
+    Op1->>OpN: ECIES-encrypted share s1(j) + Ed25519 sig over full wire payload
+    OpN->>Op1: ECIES-encrypted share sN(i) + Ed25519 sig over full wire payload
+    Op1->>Op1: Verify Ed25519 sig; decrypt; run Feldman VSS check
+    OpN->>OpN: Verify Ed25519 sig; decrypt; run Feldman VSS check
 
-    alt VSS verification fails
-        Op1->>Agent: Complaint(invalid_share, from=j)
-        Note over Agent: Ceremony aborted — restart with new session_id
+    alt Ed25519 sig invalid (unauthenticated share)
+        Op1->>Agent: RejectionReceipt(reason=unauthenticated-share, sender=j)
+        Note over Agent: Treated as absent — no slashing without authenticated evidence
+    end
+    alt VSS verification fails (authenticated bad share)
+        Op1->>Agent: Complaint(invalid_share, from=j, evidence=wire_payload+sig+plaintext)
+        Note over Agent: Ceremony aborted — slashBadShare available via Feldman VSS anchor
     end
 
     Note over Op1,OpN: Derive group public key (sum of commitment constant terms)
@@ -87,9 +93,11 @@ sequenceDiagram
 
 **No key material on the agent.** The DKG ceremony never assembles the full private key in any single location. Each operator holds one FROST key share, and the threshold `K` of them must cooperate to produce any signature. The agent machine is a coordination client only.
 
-**Feldman VSS over plain Shamir.** Feldman commitments allow every operator to independently verify that the shares they receive are consistent with the committed polynomial. A single invalid share triggers an immediate abort rather than producing a silently corrupted key.
+**Feldman VSS over plain Shamir.** Feldman commitments allow every operator to independently verify that the shares they receive are consistent with the committed polynomial. A single invalid share triggers an immediate abort rather than producing a silently corrupted key. The public Feldman commitments from Round 1 also serve as the on-chain anchor for the `slashBadShare` dispute mechanism.
 
 **Abort on complaint.** There is no dispute-resolution round. Any VSS complaint causes the entire session to abort. This keeps the protocol simple and eliminates the complexity of identifying and evicting a malicious participant mid-ceremony. The session is restarted with a fresh `session_id`.
+
+**Round 2 share encryption — FROST-SHARE-ECIES-v1.** Shares are encrypted using a fully specified ECIES construction: X25519 ECDH against the recipient's dedicated on-chain `x25519_pubkey` (separate from the signing key), HKDF-SHA-256 key derivation, and ChaCha20-Poly1305 AEAD with deterministic nonce. The sender authenticates the full wire payload — including the ephemeral public key — with their Ed25519 AVS signing key. Covering the ephemeral key in the signature prevents a framing attack where an interceptor replaces the ephemeral key to manufacture evidence of an undecryptable share against an honest operator. Every transmission attempt MUST use a freshly generated ephemeral X25519 scalar; nonce reuse would allow reconstruction of the plaintext share.
 
 **PoK prevents rogue key attack.** Each operator broadcasts a Schnorr proof-of-knowledge over their constant-term commitment before Round 2. Without this, a malicious operator could choose their commitment to bias the group public key to one they control. PoK verification is a hard gate — no Round 2 shares are sent until all N-1 proofs pass.
 
