@@ -55,8 +55,8 @@ graph LR
 - **Prerequisite**: Ability to observe two partial signatures from the same operator, both using the same nonce pair `(d, e)` but over different messages
 - **Attack**: RFC 9591 Section 7.3 documents this attack precisely. In FROST, each partial signature has the form `z_i = d_i + e_i * rho_i + lambda_i * s_i * c`, where `(d_i, e_i)` are the nonce scalars and `s_i` is the secret share. If `(d_i, e_i)` are identical across two signing rounds for messages `m` and `m'`, the attacker obtains two equations `z_i` and `z_i'` that differ only in their challenge scalar `c` vs `c'`. Subtracting yields `z_i - z_i' = lambda_i * s_i * (c - c')`. Since `lambda_i` (Lagrange coefficient) and both challenges are fully public, the attacker solves for `s_i` directly.
 - **Impact**: Full recovery of operator `i`'s FROST key share. With enough shares recovered (>= K), the group private key can be reconstructed and the agent's identity is permanently forged.
-- **Current mitigation**: The design (design.md, threshold-signing/spec.md) mandates fresh CSPRNG-derived nonces per signing request. Nonce reuse is listed as a slashable condition. The agent logs signed nonce commitments `(operator_id, D_i, E_i, signature)` across sessions and can detect reuse.
-- **Gap / Recommendation**: The spec states nonce reuse is "detectable" but does not specify the detection mechanism or the on-chain slashing path. The coordinator must maintain a per-operator log of emitted nonce commitments and enforce that no commitment is recycled. This log should be written to a tamper-evident store. The slashing condition must be encoded in the AVS contract and audited before mainnet. Operators should use deterministic nonce derivation as a defense-in-depth measure (RFC 9591 Appendix B: derive nonces from HMAC(secret_share, message)), ensuring that even a buggy CSPRNG that returns repeated values cannot produce two different messages with the same nonce.
+- **Current mitigation**: The threshold-signing spec mandates the RFC 9591 hybrid HKDF nonce derivation: `HKDF-SHA-512(IKM=secret_share, salt=random_32, info="FROST-ED25519-SHA512-v1" || session_id || message_hash)`. The `info` binding to `session_id || message_hash` is the primary structural defense — identical `(d_i, e_i)` across distinct messages is structurally impossible even if the CSPRNG returns an identical salt. Nonce scalar zeroing after use is defense-in-depth against post-computation memory exfiltration. The AVS contract exposes `slashNonceReuse(operator_id, signed_commitment_a, signed_commitment_b)` for lazy fraud proofs based on two operator-signed nonce commitments with identical `(D_i, E_i)`.
+- **Gap / Recommendation**: The threat model's prior framing ("nonce deletion is the mitigation") is backwards. The HKDF binding is the primary control; deletion is defense-in-depth. This distinction is documented in `threshold-signing/spec.md` (threat-model-gap-resolution change) to prevent auditor confusion. The `slashNonceReuse` function and the nonce commitment archive retention policy (aligned with the EigenLayer slashing window) are the remaining implementation requirements.
 - **Severity**: Critical
 
 ---
@@ -74,16 +74,41 @@ graph LR
 
 ---
 
+### T-A5a: Ephemeral Key Substitution Framing Attack (Round 2 Share Delivery)
+
+- **Category**: Cryptographic / Protocol
+- **Attacker**: Network-layer adversary (MITM on the P2P channel between operators)
+- **Prerequisite**: Ability to intercept and modify Round 2 wire messages between operators
+- **Attack**: An operator's Round 2 share delivery message has the form `{ ephemeral_pk, ciphertext, ed25519_sig }`. If the Ed25519 signature covers only `ciphertext` (not `ephemeral_pk`), the attacker intercepts the message, replaces `ephemeral_pk` with their own ephemeral public key, and forwards the modified message. The receiver derives a different shared secret using the attacker's ephemeral key, and AEAD decryption fails. However, the Ed25519 signature still verifies — because `ephemeral_pk` was not covered. The receiver now holds cryptographic evidence (valid operator signature over a ciphertext that produces decryption failure) that appears to prove the honest operator sent an undecryptable share. This can be submitted as a `slashBadShare` complaint to slash an innocent operator.
+- **Impact**: Honest operators can be framed for ceremony failures and slashed. A network-layer adversary with no access to any key material can manufacture slashable evidence against any operator.
+- **Current mitigation**: `FROST-SHARE-ECIES-v1` requires the Ed25519 signature to cover the full wire payload including `ephemeral_pk`. The signed payload is `ephemeral_pk || sender_index_u16be || recipient_index_u16be || ciphertext`. Substituting `ephemeral_pk` without also forging the Ed25519 signature (which requires the sender's AVS private key) invalidates the authentication and the message is treated as absent — not as slashable evidence.
+- **Gap / Recommendation**: Addressed by `FROST-SHARE-ECIES-v1` spec. The key invariant to test: any modification to `ephemeral_pk` in a wire message must cause signature verification to fail before the AEAD decryption is even attempted.
+- **Severity**: High
+
+---
+
+### T-A5b: Bad Share Accountability Gap — On-Chain Slashing Not Directly Enforceable
+
+- **Category**: Cryptographic / Protocol
+- **Attacker**: Malicious operator
+- **Prerequisite**: Ability to participate in a DKG ceremony and send an authenticated but invalid share to a peer
+- **Attack**: An operator signs and sends a valid FROST-SHARE-ECIES-v1 wire message, but the decrypted plaintext is not a valid FROST share for the recipient (fails Feldman VSS check). The on-chain contract can verify the Ed25519 signature over the ciphertext, but cannot verify the plaintext's validity without performing AEAD decryption — which requires the recipient's `x25519_privkey`, which cannot go on-chain. The attacker's share is authenticated but invalid. Without an on-chain verification path, the bad-share complaint is untriaged and the operator cannot be slashed purely from the contract.
+- **Impact**: A malicious operator can participate in DKG ceremonies, deliberately send invalid shares to specific peers (forcing ceremony abort), and avoid on-chain accountability. Repeated ceremony aborts exhaust operator resources and may be used to delay or block a target agent's bootstrap indefinitely.
+- **Current mitigation**: The `slashBadShare` function uses the sender's Round 1 Feldman VSS commitments (already stored on-chain) as a verifiable anchor. The recipient decrypts the share off-chain, submits `(wire_payload, sig, decrypted_plaintext, recipient_index)`, and the contract verifies `decrypted_share·G ≠ Σ_k(C_i[k]·recipient_index^k)` against the public commitments. No private key is needed on-chain. This converts the dispute from testimony to a cryptographic proof against a pre-existing public commitment.
+- **Gap / Recommendation**: The `slashBadShare` path requires the recipient to cooperate (decrypt and submit). An attacker can make the recipient's decryption step harder by choosing a share that is very close to valid (passes VSS approximately). The Feldman VSS check is a strict equality check, so there is no "approximately valid" — either `decrypted_share·G == check` exactly, or it doesn't. No gap for approximate validity. The remaining limitation is that a bad AEAD ciphertext (that cannot be decrypted at all) cannot produce a `decrypted_plaintext` for the dispute. In this case, slashing is limited to the authenticated undecryptable ciphertext — ceremony abort is the consequence, not a slashing event. This should be documented as a protocol boundary.
+- **Severity**: Medium (accountability gap documented and partially addressed; full enforcement requires recipient cooperation)
+
+---
+
 ### T-003: Feldman VSS Share Forgery Bypassing Verification
 
 - **Category**: Cryptographic
 - **Attacker**: Malicious operator participating in DKG
 - **Prerequisite**: Control of one operator seat; ability to send different shares to different recipients
-- **Attack**: A malicious operator `j` sends a syntactically valid share to operator `i` that passes the Feldman VSS check (`s_j(i) * G == sum(C_j[k] * i^k for k)`) but uses a different polynomial than the one committed to in Round 1. Specifically, `j` constructs a share that is individually consistent with its published commitments but inconsistent with the shares it sends to other operators — resulting in a group key that operator `j` can later reconstruct with fewer than K cooperating shares because its contribution is structured to embed a backdoor.
-- **Impact**: Operator `j` learns the group private key after the ceremony, or is able to forge signatures with only the shares it controls, undermining the K-of-N guarantee.
-- **Current mitigation**: Feldman VSS commitments bind each operator's polynomial. If operator `j` sends different shares to different operators that each individually verify, the inconsistency is not directly detectable without comparing shares — which operators do not do with each other's shares in the standard protocol.
-- **Gap / Recommendation**: This is a subtle but known class of attack. The mitigation is to require operators to publish commitments to the entire polynomial (all K coefficients) in Round 1, and to verify that the product of commitment terms matches across all received shares. Additionally, consider requiring operators to publish a zero-knowledge proof that their polynomial was generated honestly (e.g., a range proof or a commitment to the polynomial evaluation). At minimum, the audit scope for the AVS contract must include verification that the coordinator enforces consistency of commitments across rounds and that complaint handling is correctly implemented.
-- **Severity**: High
+- **Attack**: A malicious operator `j` attempts to send a share to operator `i` that passes the Feldman VSS check but is evaluated from a different polynomial than the one committed to in Round 1, embedding a backdoor.
+- **Impact (claimed)**: Operator `j` could learn the group private key or forge signatures with fewer than K shares.
+- **Resolution**: **CLOSED — Infeasible under this spec.** When operator `j` publishes all K coefficient commitments `C_j[0..K-1]` in Round 1, the polynomial is fully determined at every evaluation point. The VSS check `s·G == Σ_k(C_j[k]·i^k)` has exactly one solution in `Z_q` per index — the honest evaluation `f_j(i)`. An operator cannot produce a different scalar `s' ≠ f_j(i)` satisfying the same check without breaking discrete log on Ed25519. The "inconsistency not directly detectable" property applies only to a protocol without public coefficient commitments; this protocol publishes all K commitments in Round 1, eliminating that property. Backdoor embedding via a structured polynomial collapses into the rogue key attack (T-002), which is blocked by the mandatory PoK requirement. The residual bad-share risk (authenticated plaintext failing VSS) is addressed by T-A5b and the `slashBadShare` mechanism. See `frost-dkg/spec.md` (threat-model-gap-resolution change) for the full argument.
+- **Severity**: High → **Closed (infeasible)**
 
 ---
 
@@ -94,9 +119,9 @@ graph LR
 - **Prerequisite**: Ability to collect partial signatures from the same operator `i` across many independent signing sessions; knowledge of corresponding messages and nonce commitments
 - **Attack**: Each partial signature `z_i` is a linear function of the secret share `s_i`. Across multiple sessions, the attacker collects `(z_i, c, lambda_i, nonce_commitment)` tuples. While FROST's per-request nonce generation means these equations are not directly solvable (each uses a fresh nonce, adding a new unknown), an attacker with compromised operator infrastructure could record the nonce scalars `(d_i, e_i)` at generation time. With those nonces in hand, each signing equation is a direct linear equation in `s_i` — one session is sufficient to solve for the share.
 - **Impact**: Recovery of the share for operator `i` without direct access to the operator's secure storage, leveraging network-layer access or compromised operator infrastructure.
-- **Current mitigation**: Nonces are deleted immediately after use per RFC 9591. Each partial signature uses fresh random nonces, so without knowing the nonce scalars an observer cannot recover the share from the partial signature alone.
-- **Gap / Recommendation**: The spec does not specify nonce deletion guarantees. Operators must explicitly zero nonce scalars `(d_i, e_i)` from memory after the partial signature is computed, before any network transmission. This must be a requirement in the threshold-signing spec with a corresponding test that verifies nonces are not recoverable from operator memory after a signing round. Additionally, partial signatures must not be logged in plaintext by the coordinator — only aggregated output should be retained.
-- **Severity**: High
+- **Current mitigation**: The threshold-signing spec mandates nonce scalar zeroing after use. The HKDF `info` binding to `session_id || message_hash` (same scheme as T-001) ensures structural nonce reuse prevention across distinct messages.
+- **Resolution**: **CLOSED — Not a standalone attack.** Without the nonce scalars `(d_i, e_i)`, each partial signature is one equation in two unknowns. No number of observed partial signatures yields the share — there is no "grinding" structure for uniform random nonces over `Z_q`. The attack only becomes viable if an operator records its own nonce scalars after computation, which is an operator infrastructure compromise (T-006), not a distinct grinding scenario. Removed as an independent threat category. The nonce zeroing requirement remains as defense-in-depth against T-006.
+- **Severity**: High → **Closed (collapses into T-006)**
 
 ---
 
@@ -262,9 +287,9 @@ graph LR
 - **Prerequisite**: Verifier is a smart contract (rather than an EOA) with a fallback function
 - **Attack**: The `spend` (or `SubmitVerification`) function in `SessionRegistry` transitions a session from OPEN to SPENT. If state mutation occurs after an external call (e.g., a call to the verifier contract to notify it of session completion, or a token transfer to refund bond), a malicious verifier contract re-enters `spend` before the state update, spending the same session twice. In the most dangerous variant, re-entering `spend` on a second session (not the same one) that relies on the first session's state could corrupt rate-limit accounting.
 - **Impact**: Double-spend of a session nonce (enabling a replayed signature to be submitted twice), corruption of per-verifier session counters, potential bond theft.
-- **Current mitigation**: Not explicitly addressed in the spec.
-- **Gap / Recommendation**: Apply the checks-effects-interactions pattern: mark the session as SPENT and update all accounting state before any external calls or token transfers. Additionally, implement a reentrancy guard (`nonReentrant` modifier from OpenZeppelin) on all state-mutating session functions. This must be verified in the contract audit.
-- **Severity**: High
+- **Current mitigation**: Addressed by the threat-model-gap-resolution change. `spendSession` applies CEI ordering: all state mutations (SPENT status, counter decrement) occur before any external call or token transfer. OpenZeppelin `nonReentrant` is applied to all state-mutating session functions. Bond refunds use pull-payment (separate `withdrawBond()` call), eliminating the reentrant surface from the hot path.
+- **Gap / Recommendation**: See `on-chain-session/spec.md` (threat-model-gap-resolution change). Verify in contract audit that no EigenLayer slash callback can re-enter `SessionRegistry` via a cross-contract path (not blocked by `nonReentrant`).
+- **Severity**: High → **Addressed**
 
 ---
 
@@ -301,9 +326,9 @@ graph LR
 - **Prerequisite**: Registered verifier; knowledge of a target verifier's open sessions or bond amount
 - **Attack**: If the slashing logic in `SessionRegistry` can be triggered by on-chain conditions that an attacker can fake or provoke (e.g., submitting a signature that is invalid for a legitimate session, framing it as the target verifier's submission), the attacker causes the contract to slash the target's bond. Alternatively, if session expiry itself triggers bond reduction, the attacker can deliberately prevent sessions from closing (by front-running session spending transactions or attacking the agent) to force bond depletion.
 - **Impact**: Economic attack draining a legitimate verifier's bond, disqualifying them from the system.
-- **Current mitigation**: Not explicitly addressed in the spec. The spec describes a verifier bond requirement but does not detail slash triggers.
-- **Gap / Recommendation**: Slashing must be callable only by the AVS contract itself based on cryptographically verifiable evidence (e.g., duplicate nonce proofs submitted on-chain), never by arbitrary external callers. The slash conditions, the evidence format, and the verification logic must be audited before mainnet. Bond reductions due to expired sessions must not occur — expiry is a normal operational condition, not misbehavior.
-- **Severity**: Medium
+- **Current mitigation**: Addressed by the threat-model-gap-resolution change. Slash functions require cryptographically verifiable on-chain evidence; any address may call them with valid evidence, but the contract's evidence verification is the access control. Slash amounts are compile-time constants (not governance-settable). `slashSessionAbandonment` requires a 60-second buffer beyond the expiry boundary (SLASH_BUFFER). Session expiry alone does not reduce bond balance.
+- **Gap / Recommendation**: See `on-chain-session/spec.md` (threat-model-gap-resolution change). Confirm in audit that no EigenLayer slash callback path allows bond draining via cross-contract reentrancy.
+- **Severity**: Medium → **Addressed**
 
 ---
 
@@ -314,9 +339,9 @@ graph LR
 - **Prerequisite**: A Solidity version or arithmetic path that allows integer wrap-around in session counter tracking
 - **Attack**: If the per-verifier open session counter is stored as a `uint256` (or smaller integer) and the decrement path on session expiry or spend is not guarded against underflow, an attacker who triggers rapid open/close/expire cycles may underflow the counter to `type(uint256).max`, bypassing the rate limit entirely and opening unlimited sessions.
 - **Impact**: Complete bypass of the per-verifier 10-session rate limit; unlimited session creation enabling T-012 at no additional cost.
-- **Current mitigation**: Not explicitly addressed. Solidity 0.8+ provides checked arithmetic by default.
-- **Gap / Recommendation**: Use Solidity 0.8+ to get built-in overflow protection. Add explicit bounds checks on session counter decrements — decrement only when `counter > 0`. Implement property-based tests (invariant tests using Foundry's `invariant_` framework) asserting that the open session counter for any verifier is always between 0 and 10 inclusive after any sequence of operations.
-- **Severity**: Medium
+- **Current mitigation**: Addressed by the threat-model-gap-resolution change. Solidity 0.8+ is now a contract requirement (checked arithmetic by default). Session status uses a three-value enum `{ OPEN, SPENT, EXPIRED }` to prevent double-decrement. Foundry `invariant_sessionCountBounded` is a required test asserting `openSessionCounts[v] <= MAX_OPEN_SESSIONS && >= 0` after any sequence of operations.
+- **Gap / Recommendation**: See `on-chain-session/spec.md` (threat-model-gap-resolution change). No remaining gaps.
+- **Severity**: Medium → **Addressed**
 
 ---
 
@@ -370,9 +395,9 @@ graph LR
 - **Prerequisite**: Ability to shut down or disconnect > N - K + 1 operators simultaneously, spanning the entire resharing epoch
 - **Attack**: During a FROST resharing ceremony, old shares are invalidated and new shares must be distributed. If a sufficient number of operators are offline during the resharing ceremony, the ceremony cannot complete. If the old shares are then deleted by honest operators (per the spec requirement), and fewer than K operators have successfully received new shares, the key is permanently lost — no threshold can be formed with either old (deleted) or new (incomplete) shares.
 - **Impact**: Permanent loss of the agent's private key. The identity is effectively destroyed and cannot be recovered.
-- **Current mitigation**: Not explicitly addressed. The design mentions resharing requires all N operators for ceremony participation.
-- **Gap / Recommendation**: Resharing ceremonies must have a two-phase commit: old shares must not be deleted until the new share distribution is confirmed complete across all N operators with a verifiable acknowledgment. If the ceremony fails (insufficient operators), the old shares must remain valid and the ceremony must be retried. Define a minimum operator availability threshold for initiating resharing (e.g., all N operators must be online and responsive before the ceremony begins). Implement a health check gate in the coordinator before initiating any resharing.
-- **Severity**: High
+- **Current mitigation**: Addressed by the two-phase resharing protocol in `key-succession/spec.md` (distributed-key-custody change), further strengthened by the threat-model-gap-resolution change. Phase 2 confirmations now go directly on-chain via `confirmResharing(epoch, sig)` calls — no coordinator aggregation in memory. The contract counts confirmations and emits `ResharingCompleted(epoch)` when all N are received. If the coordinator restarts during Phase 2, no state is lost — all coordination state is on-chain. `abortResharing(epoch)` is callable by any party after 30 minutes if not all N confirmations arrive.
+- **Gap / Recommendation**: See `key-succession/spec.md` (threat-model-gap-resolution change). Remaining implementation requirement: confirm that `ackShareReceived` attests VSS validity (not mere delivery) before signing the receipt, so `slashNonConfirmation` is not applicable to operators who correctly rejected invalid shares.
+- **Severity**: High → **Addressed**
 
 ---
 
@@ -426,9 +451,9 @@ graph LR
 - **Prerequisite**: A verifier that caches the agent's current public key with a fixed TTL; knowledge of a pending succession event that changes the key
 - **Attack**: A verifier caches `(agent_id → current_pubkey)` with a TTL of, say, 1 hour. The agent undergoes a legitimate succession (old key → new key) within that hour. The verifier continues to verify against the old public key. If the old key has been compromised, an attacker can present forged signatures that verify against the cached (but now invalidated) old key, and the verifier accepts them.
 - **Impact**: Verifier incorrectly authenticates an attacker's forged signature using a superseded public key.
-- **Current mitigation**: The on-chain succession chain is authoritative. Verifiers are expected to "re-walk on cache miss." The architecture doc notes "verifiers cache the current key with TTL."
-- **Gap / Recommendation**: The cache TTL must be short enough to bound the window of exposure after a succession. Implement an on-chain event (`SuccessionPublished(agent_pubkey, new_pubkey, timestamp)`) and require verifier implementations to subscribe to these events and invalidate their cache immediately on receipt. The TTL should be a configurable maximum (e.g., 5 minutes), not an indefinite cache. Document the expected staleness bound in the verification protocol spec.
-- **Severity**: Medium
+- **Current mitigation**: Addressed by the threat-model-gap-resolution change. `SuccessionPublished(bytes32 indexed agentPubkey, bytes32 newPubkey, uint256 timestamp, uint256 blockNumber)` event is now fully specified. The `indexed agentPubkey` field enables per-agent log filtering. Verifiers wait 6 blocks before treating an event as final (re-org protection). 5-minute TTL is the hard backstop; WebSocket subscription is SHOULD; polling every 60 seconds is SHOULD for resilience — maximum staleness under WebSocket outage is 6 minutes.
+- **Gap / Recommendation**: See `verification-protocol/spec.md` (threat-model-gap-resolution change). No remaining protocol gaps.
+- **Severity**: Medium → **Addressed**
 
 ---
 
