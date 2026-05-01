@@ -251,55 +251,61 @@ sequenceDiagram
 
     Agent->>Ops: DKGInit(session_id, K, N)
 
-    Note over Ops: Round 1 — Commitment + Proof of Knowledge
+    Note over Ops: Round 1 - Commitment and Proof of Knowledge
 
-    Ops->>Ops: Generate secret polynomial f_i(x), degree K-1
-    Ops->>Ops: Compute Feldman VSS commitments C_i[0..K-1]
-    Ops->>Ops: Compute PoK: k ← Z_q, R_i = k·G, c_i = HDKG(i || φ_{i0} || R_i), μ_i = k + a_{i0}·c_i mod q
-    Ops->>Agent: Broadcast (C_i, σ_i = (R_i, μ_i))
+    Ops->>Ops: Generate secret polynomial f_i(x) degree K-1
+    Ops->>Ops: Compute Feldman commitments C_i[0..K-1]
+    Ops->>Ops: Compute PoK (R_i, mu_i)
+    Ops->>Agent: Broadcast commitments and PoK
     Agent->>Ops: Relay all peer commitments
 
     Note over Ops: PoK Verification Gate
 
-    Ops->>Ops: For each peer l: verify R_l == μ_l·G - c_l·φ_{l0}
-    alt Any PoK fails
-        Ops->>Agent: Complaint(invalid_pok, culprit=l)
-        Note over Agent: Ceremony aborted — no Round 2
+    Ops->>Ops: Verify each peer PoK
+    alt PoK verification fails
+        Ops->>Agent: Complaint invalid_pok
+        Note over Agent: Ceremony aborted - no Round 2
+    else All PoK valid
+        Note over Ops: Continue to Round 2
     end
 
-    Note over Ops: Round 2 — Encrypted Share Exchange (FROST-SHARE-ECIES-v1)
+    Note over Ops: Round 2 - Encrypted Share Exchange
 
-    Ops->>Ops: For each peer j: encrypt share s_i(j) to j's x25519_pubkey
-    Ops->>Ops: Sign full wire payload with Ed25519 AVS key
-    Ops->>Ops: Send encrypted share + signature to peer
+    Ops->>Ops: Encrypt shares for each peer
+    Ops->>Ops: Sign payload with Ed25519 key
+    Ops->>Ops: Send encrypted share
 
-    Ops->>Ops: Verify Ed25519 sig; decrypt; run Feldman VSS check
-    alt Sig invalid
-        Ops->>Agent: RejectionReceipt(unauthenticated-share)
+    Ops->>Ops: Verify signature and decrypt
+    alt Signature invalid
+        Ops->>Agent: RejectionReceipt unauthenticated-share
         Note over Ops: Sender treated as absent
-    end
-    alt VSS check fails (sig valid)
-        Ops->>Agent: Complaint(invalid_share, evidence=wire_payload+sig+plaintext)
-        Note over Agent: Ceremony aborted; slashBadShare available
+    else Signature valid
+        Ops->>Ops: Run Feldman VSS check
+        alt VSS check fails
+            Ops->>Agent: Complaint invalid_share with evidence
+            Note over Agent: Ceremony aborted
+        else VSS check passes
+            Note over Ops: Shares accepted
+        end
     end
 
     Note over Ops: Key Derivation
 
-    Ops->>Ops: group_pubkey = Σ C_i[0] for all i
-    Ops->>Ops: Reject if group_pubkey equals identity point
-    Agent->>Ops: ConfirmGroupPubkey(session_id)
-    Ops->>Agent: group_pubkey (confirmed)
+    Ops->>Ops: Compute group_pubkey from commitments
+    Ops->>Ops: Reject if identity point
+    Agent->>Ops: ConfirmGroupPubkey
+    Ops->>Agent: group_pubkey confirmed
 
-    Note over Agent: db_commitment via threshold signature
+    Note over Agent: DB commitment via threshold signature
 
-    Agent->>Ops: SigningRound1(sha256(agent_id || threshold_pubkey || control_pubkey))
+    Agent->>Ops: SigningRound1 hash input
     Ops->>Agent: Partial signatures
-    Agent->>Agent: FROST aggregation → db_commitment
+    Agent->>Agent: Aggregate signatures to db_commitment
 
-    Agent->>EigenDA: Write(identity_record, db_commitment)
+    Agent->>EigenDA: Write identity_record and db_commitment
     EigenDA->>Agent: eigenda_record_id
 
-    Agent->>Chain: AnchorIdentity(group_pubkey, control_pubkey, eigenda_record_id, db_commitment [, guardian])
+    Agent->>Chain: AnchorIdentity
     Chain->>Agent: tx_confirmed
 ```
 
