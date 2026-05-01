@@ -132,54 +132,54 @@ HashID establishes and manages cryptographic identities for autonomous agents. T
                                     │       Ethereum Chain        │
                                     │                             │
                                     │  ┌───────────────────────┐  │
-                                    │  │    AnchorIdentity      │  │
-                                    │  │  group_pubkey          │  │
-                                    │  │  control_pubkey        │  │
-                                    │  │  eigenda_record_id     │  │
-                                    │  │  db_commitment         │  │
-                                    │  │  guardian               │  │
+                                    │  │    AnchorIdentity     │  │
+                                    │  │  group_pubkey         │  │
+                                    │  │  control_pubkey       │  │
+                                    │  │  eigenda_record_id    │  │
+                                    │  │  db_commitment        │  │
+                                    │  │  guardian             │  │
                                     │  └───────────────────────┘  │
                                     │                             │
                                     │  ┌───────────────────────┐  │
-                                    │  │   SessionRegistry      │  │
-                                    │  │  verifier bonds        │  │
-                                    │  │  session lifecycle      │  │
-                                    │  │  fee escrow            │  │
-                                    │  │  slash functions        │  │
+                                    │  │   SessionRegistry     │  │
+                                    │  │  verifier bonds       │  │
+                                    │  │  session lifecycle    │  │
+                                    │  │  fee escrow           │  │
+                                    │  │  slash functions      │  │
                                     │  └───────────────────────┘  │
                                     │                             │
                                     │  ┌───────────────────────┐  │
-                                    │  │  SuccessionRegistry    │  │
-                                    │  │  commit-reveal         │  │
-                                    │  │  guardian veto          │  │
-                                    │  │  control key rotation   │  │
+                                    │  │  SuccessionRegistry   │  │
+                                    │  │  commit-reveal        │  │
+                                    │  │  guardian veto        │  │
+                                    │  │  control key rotation │  │
                                     │  └───────────────────────┘  │
                                     │                             │
-                                    │  ┌───────────────────────┐  │
-                                    │  │   ServiceManager       │  │
-                                    │  │  operator registry     │  │
-                                    │  │  stake tiers           │  │
-                                    │  │  participation tracking │  │
-                                    │  └───────────────────────┘  │
+                                    │  ┌─────────────────────────┐│
+                                    │  │  ServiceManager         ││
+                                    │  │  operator registry      ││
+                                    │  │  stake tiers            ││
+                                    │  │ participation tracking  ││
+                                    │  └─────────────────────────┘│
                                     └──────────────┬──────────────┘
                                                    │
                     ┌──────────────────────────────┼──────────────────────────────┐
                     │                              │                              │
               ┌─────┴─────┐              ┌─────────┴─────────┐            ┌──────┴──────┐
-              │   Agent   │              │  EigenLayer AVS    │            │   Verifier  │
-              │           │              │  Operator Network  │            │             │
-              │ hashid-cli│◄────────────►│                    │            │  Hono HTTP  │
+              │   Agent   │              │  EigenLayer AVS   │            │   Verifier  │
+              │           │              │  Operator Network │            │             │
+              │ hashid-cli│◄────────────►│                   │            │  Hono HTTP  │
               │           │  direct P2P  │  ┌──┐ ┌──┐ ┌──┐   │            │  server     │
               │ control   │  (signing,   │  │O1│ │O2│ │ON│   │            │             │
               │ key only  │   DKG)       │  └──┘ └──┘ └──┘   │            │ bond +      │
-              └─────┬─────┘              │  each holds one    │            │ sessions    │
-                    │                    │  FROST key share    │            └──────┬──────┘
-                    │                    └─────────────────────┘                   │
-                    │                              │                              │
+              └─────┬─────┘              │  each holds one   │            │ sessions    │
+                    │                    │  FROST key share  │            └──────┬──────┘
+                    │                    └───────────────────┘                   │
+                    │                              │                             │
                     │                    ┌─────────┴─────────┐                   │
-                    └───────────────────►│     EigenDA        │◄──────────────────┘
-                     write identity      │  identity records  │   read identity
-                     record              │  nonce archives    │   record
+                    └───────────────────►│     EigenDA       │◄──────────────────┘
+                     write identity      │  identity records │   read identity
+                     record              │  nonce archives   │   record
                                          └───────────────────┘
 ```
 
