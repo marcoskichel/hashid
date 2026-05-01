@@ -540,32 +540,35 @@ sequenceDiagram
     participant A as Agent CLI
     participant Ops as VRF-Sampled Operators (K)
 
-    V->>V: Select 5 challenges; compute keccak256 hashes
+    V->>V: Select 5 challenges and hash them
     V->>Chain: initSession(agent_pubkey, nonce, verifier_pubkey, challenge_hashes)
-    Chain->>V: session_id (status: OPEN)
+    Chain->>V: session_id (OPEN)
 
-    V->>A: ChallengeRequest([c1..c5], session_id)
+    V->>A: ChallengeRequest challenges and session_id
 
-    loop For each challenge c_i
-        A->>A: Compute VRF ranking; select K operators
-        A->>A: Generate token_nonce; compute auth_token = sign(session_id || sha256(c_i || session_id) || token_nonce, control_privkey)
-        A->>Ops: SigningRound1(session_id, message=sha256(c_i || session_id), auth_token, token_nonce)
-        Ops->>Ops: Pre-checks (7 verifications)
-        Ops->>A: NonceCommitment (signed)
-        A->>Ops: SigningRound2(aggregated_nonce_commitment)
+    loop Each challenge c_i
+        A->>A: Compute VRF ranking and select K operators
+        A->>A: Generate token_nonce and auth_token
+        A->>Ops: SigningRound1(session_id, message_hash, auth_token, token_nonce)
+
+        Ops->>Ops: Run pre-checks
+        Ops->>A: NonceCommitment signed
+
+        A->>Ops: SigningRound2 aggregated_nonce_commitment
         Ops->>A: PartialSignature
-        A->>A: FROST aggregation; local verification
+
+        A->>A: Aggregate signatures and verify locally
     end
 
-    A->>V: [sig_1, sig_2, sig_3, sig_4, sig_5]
+    A->>V: Return 5 signatures
 
-    V->>V: For each (c_i, sig_i): ed25519.verify(sig_i, sha256(c_i || session_id), group_pubkey)
+    V->>V: Verify each signature against group_pubkey
 
-    alt All 5 valid
-        V->>Chain: spendSession(session_id, [sig_1..sig_5])
-        Chain->>Chain: Verify all 5; mark SPENT
-    else Any invalid
-        V->>V: Return { verified: false }
+    alt All signatures valid
+        V->>Chain: spendSession(session_id, signatures)
+        Chain->>Chain: Verify all and mark SPENT
+    else Any signature invalid
+        V->>V: Return verified false
         Note over V,Chain: Session remains OPEN for retry
     end
 ```
